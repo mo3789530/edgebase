@@ -1,8 +1,10 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"log"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -43,4 +45,19 @@ func Init(endpoint, accessKey, secretKey, bucket string) (*MinIOClient, error) {
 		Client: minioClient,
 		Bucket: bucket,
 	}, nil
+}
+
+func (m *MinIOClient) Upload(ctx context.Context, objectName string, data []byte, contentType string) error {
+	_, err := m.Client.PutObject(ctx, m.Bucket, objectName, bytes.NewReader(data), int64(len(data)), minio.PutObjectOptions{
+		ContentType: contentType,
+	})
+	return err
+}
+
+func (m *MinIOClient) GetPresignedURL(ctx context.Context, objectName string, expiry time.Duration) (string, error) {
+	url, err := m.Client.PresignedGetObject(ctx, m.Bucket, objectName, expiry, nil)
+	if err != nil {
+		return "", err
+	}
+	return url.String(), nil
 }
