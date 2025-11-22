@@ -27,7 +27,7 @@ func main() {
 	}
 
 	// Initialize database connection
-	dbConn, err := db.Init(cfg.DatabaseURL)
+	dbConn, err := db.Init(cfg.DatabaseURL, cfg.DBMaxOpenConns, cfg.DBMaxIdleConns, cfg.DBConnMaxLifetime)
 	if err != nil {
 		log.Fatalf("failed to connect DB: %v", err)
 	}
