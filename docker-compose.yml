@@ -1,0 +1,77 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: edgebase
+      POSTGRES_USER: edgebase
+      POSTGRES_PASSWORD: edgebase
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U edgebase"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mqtt:
+    image: eclipse-mosquitto:2-alpine
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - mqtt_data:/mosquitto/data
+    healthcheck:
+      test: ["CMD", "mosquitto_sub", "-h", "localhost", "-t", "$SYS/#", "-C", "1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  sync-service:
+    build:
+      context: ./db
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mqtt:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://edgebase:edgebase@postgres:5432/edgebase
+      MQTT_BROKER: mqtt://mqtt:1883
+    ports:
+      - "8001:8001"
+
+  edge-runner:
+    build:
+      context: ./functions
+      dockerfile: Dockerfile
+    depends_on:
+      mqtt:
+        condition: service_healthy
+    environment:
+      MQTT_BROKER: mqtt://mqtt:1883
+    ports:
+      - "8002:8002"
+
+  control-plane:
+    build:
+      context: ./platform/control-plane
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mqtt:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://edgebase:edgebase@postgres:5432/edgebase
+      MQTT_BROKER: mqtt://mqtt:1883
+    ports:
+      - "8000:8000"
+
+volumes:
+  postgres_data:
+  mqtt_data:
