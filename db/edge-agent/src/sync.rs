@@ -30,6 +30,11 @@ impl SyncAgent {
         }
     }
 
+    pub fn with_batch_size(mut self, batch_size: usize) -> Self {
+        self.batch_size = batch_size;
+        self
+    }
+
     pub async fn sync_to_control_plane(&self) -> Result<SyncResult> {
         let pending = self.db.get_pending_records(self.batch_size)?;
         
@@ -203,5 +208,162 @@ impl SyncAgent {
 
             tokio::time::sleep(self.poll_interval).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::CommandStatus;
+    use chrono::Utc;
+    use std::collections::HashMap;
+    use std::fs;
+    use uuid::Uuid;
+
+    fn setup_test_db() -> (Database, String) {
+        let db_path = format!("/tmp/test_sync_{}.db", Uuid::new_v4());
+        let db = Database::new(&db_path).expect("Failed to create test database");
+        (db, db_path)
+    }
+
+    #[test]
+    fn test_sync_agent_creation() {
+        let (db, db_path) = setup_test_db();
+        let agent = SyncAgent::new(db, "http://localhost:8080".to_string(), "device-1".to_string());
+        
+        assert_eq!(agent.device_id, "device-1");
+        assert_eq!(agent.api_url, "http://localhost:8080");
+        assert_eq!(agent.batch_size, 1000);
+        
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn test_sync_agent_with_batch_size() {
+        let (db, db_path) = setup_test_db();
+        let agent = SyncAgent::new(db, "http://localhost:8080".to_string(), "device-1".to_string())
+            .with_batch_size(500);
+        
+        assert_eq!(agent.batch_size, 500);
+        
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[tokio::test]
+    async fn test_sync_empty_records() {
+        let (db, db_path) = setup_test_db();
+        let agent = SyncAgent::new(db, "http://localhost:8080".to_string(), "device-1".to_string());
+        
+        let result = agent.sync_to_control_plane().await;
+        assert!(result.is_ok());
+        
+        let sync_result = result.unwrap();
+        assert!(sync_result.success);
+        assert_eq!(sync_result.synced_count, 0);
+        assert_eq!(sync_result.failed_count, 0);
+        
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[tokio::test]
+    async fn test_sync_with_pending_records() {
+        let (db, db_path) = setup_test_db();
+        
+        // Insert test data
+        let data = TelemetryData {
+            id: "test-1".to_string(),
+            device_id: "device-1".to_string(),
+            sensor_id: "sensor-1".to_string(),
+            timestamp: Utc::now(),
+            data_type: "temperature".to_string(),
+            value: 25.5,
+            unit: Some("celsius".to_string()),
+            metadata: None,
+            version: 1,
+        };
+        db.insert_telemetry(&data).expect("Failed to insert");
+        
+        let agent = SyncAgent::new(db, "http://localhost:8080".to_string(), "device-1".to_string());
+        
+        // This will fail due to network error, but we can verify the logic
+        let result = agent.sync_to_control_plane().await;
+        assert!(result.is_ok());
+        
+        let sync_result = result.unwrap();
+        assert!(!sync_result.success);
+        assert_eq!(sync_result.failed_count, 1);
+        
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn test_command_creation() {
+        let mut payload = HashMap::new();
+        payload.insert("action".to_string(), serde_json::json!("restart"));
+        
+        let command = Command {
+            command_id: "cmd-1".to_string(),
+            device_id: "device-1".to_string(),
+            command_type: "system".to_string(),
+            payload,
+            status: CommandStatus::Pending,
+            created_at: Utc::now(),
+        };
+        
+        assert_eq!(command.command_id, "cmd-1");
+        assert_eq!(command.command_type, "system");
+    }
+
+    #[tokio::test]
+    async fn test_apply_command_storage() {
+        let (db, db_path) = setup_test_db();
+        
+        let mut payload = HashMap::new();
+        payload.insert("action".to_string(), serde_json::json!("restart"));
+        
+        let command = Command {
+            command_id: "cmd-1".to_string(),
+            device_id: "device-1".to_string(),
+            command_type: "config_update".to_string(),
+            payload,
+            status: CommandStatus::Pending,
+            created_at: Utc::now(),
+        };
+        
+        let agent = SyncAgent::new(db, "http://localhost:8080".to_string(), "device-1".to_string());
+        
+        // Store command in DB
+        agent.db.store_command(&command).expect("Failed to store command");
+        
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn test_sync_result_structure() {
+        let result = SyncResult {
+            success: true,
+            synced_count: 10,
+            failed_count: 0,
+            errors: vec![],
+        };
+        
+        assert!(result.success);
+        assert_eq!(result.synced_count, 10);
+        assert_eq!(result.failed_count, 0);
+        assert!(result.errors.is_empty());
+    }
+
+    #[test]
+    fn test_sync_result_with_errors() {
+        let result = SyncResult {
+            success: false,
+            synced_count: 0,
+            failed_count: 5,
+            errors: vec!["Network error".to_string()],
+        };
+        
+        assert!(!result.success);
+        assert_eq!(result.failed_count, 5);
+        assert_eq!(result.errors.len(), 1);
     }
 }

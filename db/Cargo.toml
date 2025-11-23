@@ -1,5 +1,5 @@
 [workspace]
-members = ["edge-agent", "sync-service"]
+members = ["edge-agent"]
 resolver = "2"
 
 [workspace.dependencies]
