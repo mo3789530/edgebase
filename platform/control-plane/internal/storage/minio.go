@@ -61,3 +61,19 @@ func (m *MinIOClient) GetPresignedURL(ctx context.Context, objectName string, ex
 	}
 	return url.String(), nil
 }
+
+func (m *MinIOClient) Download(ctx context.Context, objectName string) ([]byte, error) {
+	object, err := m.Client.GetObject(ctx, m.Bucket, objectName, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer object.Close()
+
+	buf := new(bytes.Buffer)
+	_, err = buf.ReadFrom(object)
+	if err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
+}

@@ -52,6 +52,18 @@ func (m *MockSyncService) AcknowledgeSync(ctx context.Context, nodeID uuid.UUID,
 	args := m.Called(ctx, nodeID, syncID, result)
 	return args.Error(0)
 }
+func (m *MockSyncService) QueueDeployment(ctx context.Context, nodeID, functionID uuid.UUID) error {
+	args := m.Called(ctx, nodeID, functionID)
+	return args.Error(0)
+}
+func (m *MockSyncService) CreateRoute(ctx context.Context, host, path, functionID string, methods []string, priority int32, popSelector *string) (interface{}, error) {
+	args := m.Called(ctx, host, path, functionID, methods, priority, popSelector)
+	return args.Get(0), args.Error(1)
+}
+func (m *MockSyncService) ListRoutes(ctx context.Context) (interface{}, error) {
+	args := m.Called(ctx)
+	return args.Get(0), args.Error(1)
+}
 
 type MockArtifactService struct {
 	mock.Mock
@@ -73,6 +85,18 @@ func (m *MockArtifactService) DeleteFunction(ctx context.Context, id uuid.UUID) 
 	args := m.Called(ctx, id)
 	return args.Error(0)
 }
+func (m *MockArtifactService) CreateFunction(ctx context.Context, name, entrypoint, runtime string, memoryPages, maxExecutionMs int32) (*model.Function, error) {
+	args := m.Called(ctx, name, entrypoint, runtime, memoryPages, maxExecutionMs)
+	return args.Get(0).(*model.Function), args.Error(1)
+}
+func (m *MockArtifactService) UploadArtifact(ctx context.Context, id uuid.UUID, binary []byte) (*model.Function, error) {
+	args := m.Called(ctx, id, binary)
+	return args.Get(0).(*model.Function), args.Error(1)
+}
+func (m *MockArtifactService) GetArtifactData(ctx context.Context, id, version string) ([]byte, error) {
+	args := m.Called(ctx, id, version)
+	return args.Get(0).([]byte), args.Error(1)
+}
 
 type MockSchemaService struct {
 	mock.Mock
@@ -87,13 +111,45 @@ func (m *MockSchemaService) ListSchemas(ctx context.Context) ([]model.SchemaMigr
 	return args.Get(0).([]model.SchemaMigration), args.Error(1)
 }
 
+type MockTelemetryService struct {
+	mock.Mock
+}
+
+func (m *MockTelemetryService) SyncTelemetry(ctx context.Context, batch []model.TelemetryData) (int, error) {
+	args := m.Called(ctx, batch)
+	return args.Int(0), args.Error(1)
+}
+func (m *MockTelemetryService) GetCommands(ctx context.Context, deviceID uuid.UUID) ([]model.Command, error) {
+	args := m.Called(ctx, deviceID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]model.Command), args.Error(1)
+}
+func (m *MockTelemetryService) AckCommand(ctx context.Context, commandID uuid.UUID, success bool) error {
+	args := m.Called(ctx, commandID, success)
+	return args.Error(0)
+}
+func (m *MockTelemetryService) GetSyncStatus(ctx context.Context, deviceID uuid.UUID) (*model.SyncStatus, error) {
+	args := m.Called(ctx, deviceID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*model.SyncStatus), args.Error(1)
+}
+func (m *MockTelemetryService) RegisterDevice(ctx context.Context, name, deviceType, location string) (uuid.UUID, error) {
+	args := m.Called(ctx, name, deviceType, location)
+	return args.Get(0).(uuid.UUID), args.Error(1)
+}
+
 func TestRegisterNode(t *testing.T) {
 	mockNodeSvc := new(MockNodeService)
 	mockSyncSvc := new(MockSyncService)
 	mockArtifactSvc := new(MockArtifactService)
 	mockSchemaSvc := new(MockSchemaService)
+	mockTelemetrySvc := new(MockTelemetryService)
 
-	h := NewHandler(mockNodeSvc, mockSyncSvc, mockArtifactSvc, mockSchemaSvc)
+	h := NewHandler(mockNodeSvc, mockSyncSvc, mockArtifactSvc, mockSchemaSvc, mockTelemetrySvc)
 	app := fiber.New()
 	h.RegisterRoutes(app)
 
