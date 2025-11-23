@@ -94,6 +94,10 @@ func (m *MockFunctionRepository) Delete(ctx context.Context, id uuid.UUID) error
 	args := m.Called(ctx, id)
 	return args.Error(0)
 }
+func (m *MockFunctionRepository) Update(ctx context.Context, function *model.Function) error {
+	args := m.Called(ctx, function)
+	return args.Error(0)
+}
 
 type MockSchemaRepository struct {
 	mock.Mock
@@ -137,6 +141,24 @@ func (m *MockArtifactService) GetDownloadURL(ctx context.Context, id uuid.UUID) 
 func (m *MockArtifactService) DeleteFunction(ctx context.Context, id uuid.UUID) error {
 	args := m.Called(ctx, id)
 	return args.Error(0)
+}
+func (m *MockArtifactService) CreateFunction(ctx context.Context, name, entrypoint, runtime string, memoryPages, maxExecutionMs int32) (*model.Function, error) {
+	args := m.Called(ctx, name, entrypoint, runtime, memoryPages, maxExecutionMs)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*model.Function), args.Error(1)
+}
+func (m *MockArtifactService) UploadArtifact(ctx context.Context, id uuid.UUID, binary []byte) (*model.Function, error) {
+	args := m.Called(ctx, id, binary)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*model.Function), args.Error(1)
+}
+func (m *MockArtifactService) GetArtifactData(ctx context.Context, id, version string) ([]byte, error) {
+	args := m.Called(ctx, id, version)
+	return args.Get(0).([]byte), args.Error(1)
 }
 
 func TestGetSyncPlan(t *testing.T) {

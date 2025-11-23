@@ -14,6 +14,7 @@ type FunctionRepository interface {
 	GetByNameAndVersion(ctx context.Context, name, version string) (*model.Function, error)
 	List(ctx context.Context) ([]model.Function, error)
 	Delete(ctx context.Context, id uuid.UUID) error
+	Update(ctx context.Context, function *model.Function) error
 }
 
 type functionRepository struct {
@@ -54,4 +55,8 @@ func (r *functionRepository) List(ctx context.Context) ([]model.Function, error)
 
 func (r *functionRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	return r.db.WithContext(ctx).Delete(&model.Function{}, "id = ?", id).Error
+}
+
+func (r *functionRepository) Update(ctx context.Context, function *model.Function) error {
+	return r.db.WithContext(ctx).Save(function).Error
 }

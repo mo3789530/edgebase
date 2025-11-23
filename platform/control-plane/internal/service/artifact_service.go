@@ -18,6 +18,9 @@ type ArtifactService interface {
 	GetFunction(ctx context.Context, id uuid.UUID) (*model.Function, error)
 	GetDownloadURL(ctx context.Context, id uuid.UUID) (string, error)
 	DeleteFunction(ctx context.Context, id uuid.UUID) error
+	CreateFunction(ctx context.Context, name, entrypoint, runtime string, memoryPages, maxExecutionMs int32) (*model.Function, error)
+	UploadArtifact(ctx context.Context, id uuid.UUID, binary []byte) (*model.Function, error)
+	GetArtifactData(ctx context.Context, id, version string) ([]byte, error)
 }
 
 type artifactService struct {
@@ -80,4 +83,63 @@ func (s *artifactService) GetDownloadURL(ctx context.Context, id uuid.UUID) (str
 
 func (s *artifactService) DeleteFunction(ctx context.Context, id uuid.UUID) error {
 	return s.repo.Delete(ctx, id)
+}
+
+func (s *artifactService) CreateFunction(ctx context.Context, name, entrypoint, runtime string, memoryPages, maxExecutionMs int32) (*model.Function, error) {
+	fn := &model.Function{
+		ID:             uuid.New(),
+		Name:           name,
+		Version:        "1.0.0",
+		Entrypoint:     entrypoint,
+		Runtime:        runtime,
+		MemoryPages:    memoryPages,
+		MaxExecutionMs: maxExecutionMs,
+		CreatedAt:      time.Now(),
+	}
+
+	if err := s.repo.Create(ctx, fn); err != nil {
+		return nil, err
+	}
+
+	return fn, nil
+}
+
+func (s *artifactService) UploadArtifact(ctx context.Context, id uuid.UUID, binary []byte) (*model.Function, error) {
+	fn, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	hash := sha256.Sum256(binary)
+	hashStr := hex.EncodeToString(hash[:])
+
+	objectName := fmt.Sprintf("%s/%s/function.wasm", fn.Name, fn.Version)
+	if err := s.minioClient.Upload(ctx, objectName, binary, "application/wasm"); err != nil {
+		return nil, err
+	}
+
+	fn.Hash = hashStr
+	fn.SizeBytes = int64(len(binary))
+	fn.MinioPath = objectName
+
+	if err := s.repo.Update(ctx, fn); err != nil {
+		return nil, err
+	}
+
+	return fn, nil
+}
+
+func (s *artifactService) GetArtifactData(ctx context.Context, id, version string) ([]byte, error) {
+	// Parse UUID
+	fnID, err := uuid.Parse(id)
+	if err != nil {
+		return nil, err
+	}
+
+	fn, err := s.repo.GetByID(ctx, fnID)
+	if err != nil {
+		return nil, err
+	}
+
+	return s.minioClient.Download(ctx, fn.MinioPath)
 }

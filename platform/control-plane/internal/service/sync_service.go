@@ -48,6 +48,9 @@ type SyncResult struct {
 type SyncService interface {
 	GetSyncPlan(ctx context.Context, nodeID uuid.UUID, currentState NodeState) (*SyncPlan, error)
 	AcknowledgeSync(ctx context.Context, nodeID uuid.UUID, syncID uuid.UUID, result SyncResult) error
+	QueueDeployment(ctx context.Context, nodeID, functionID uuid.UUID) error
+	CreateRoute(ctx context.Context, host, path, functionID string, methods []string, priority int32, popSelector *string) (interface{}, error)
+	ListRoutes(ctx context.Context) (interface{}, error)
 }
 
 type syncService struct {
@@ -219,4 +222,31 @@ func (s *syncService) AcknowledgeSync(ctx context.Context, nodeID uuid.UUID, syn
 	}
 
 	return nil
+}
+
+func (s *syncService) QueueDeployment(ctx context.Context, nodeID, functionID uuid.UUID) error {
+	_, err := s.funcRepo.GetByID(ctx, functionID)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *syncService) CreateRoute(ctx context.Context, host, path, functionID string, methods []string, priority int32, popSelector *string) (interface{}, error) {
+	route := map[string]interface{}{
+		"id":           uuid.New().String(),
+		"host":         host,
+		"path":         path,
+		"function_id":  functionID,
+		"methods":      methods,
+		"priority":     priority,
+		"pop_selector": popSelector,
+	}
+	return route, nil
+}
+
+func (s *syncService) ListRoutes(ctx context.Context) (interface{}, error) {
+	// Return empty list for now
+	return []interface{}{}, nil
 }

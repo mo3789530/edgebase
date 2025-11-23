@@ -44,6 +44,10 @@ func main() {
 		&model.SchemaMigration{},
 		&model.NodeFunctionDeployment{},
 		&model.SyncRecord{},
+		&model.Device{},
+		&model.TelemetryData{},
+		&model.Command{},
+		&model.SyncStatus{},
 	); err != nil {
 		log.Fatalf("failed to migrate DB: %v", err)
 	}
@@ -70,18 +74,20 @@ func main() {
 	funcRepo := repository.NewFunctionRepository(dbConn)
 	schemaRepo := repository.NewSchemaRepository(dbConn)
 	syncRepo := repository.NewSyncRepository(dbConn)
+	telemetryRepo := repository.NewTelemetryRepository(dbConn)
 
 	// Initialize Services
 	nodeSvc := service.NewNodeService(nodeRepo)
 	artifactSvc := service.NewArtifactService(funcRepo, minioClient)
 	schemaSvc := service.NewSchemaService(schemaRepo)
 	syncSvc := service.NewSyncService(syncRepo, nodeRepo, funcRepo, schemaRepo, artifactSvc)
+	telemetrySvc := service.NewTelemetryService(telemetryRepo)
 
 	// Initialize Fiber app
 	app := fiber.New()
 
 	// Register routes
-	h := handler.NewHandler(nodeSvc, syncSvc, artifactSvc, schemaSvc)
+	h := handler.NewHandler(nodeSvc, syncSvc, artifactSvc, schemaSvc, telemetrySvc)
 	h.RegisterRoutes(app)
 
 	// Start server
