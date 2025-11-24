@@ -84,6 +84,14 @@ impl TelemetryCollector {
     pub fn validate_reading(value: f64, min: f64, max: f64) -> bool {
         value >= min && value <= max
     }
+
+    pub fn validate_sensor_id(sensor_id: &str) -> bool {
+        !sensor_id.is_empty() && sensor_id.len() <= 255
+    }
+
+    pub fn validate_data_type(data_type: &str) -> bool {
+        !data_type.is_empty() && data_type.len() <= 100
+    }
 }
 
 #[cfg(test)]
@@ -259,6 +267,206 @@ mod tests {
 
         let pending_count = collector.get_pending_count().expect("Failed to get pending count");
         assert_eq!(pending_count, 10);
+
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn test_validate_sensor_id() {
+        assert!(TelemetryCollector::validate_sensor_id("sensor-1"));
+        assert!(TelemetryCollector::validate_sensor_id("s"));
+        assert!(!TelemetryCollector::validate_sensor_id(""));
+        assert!(!TelemetryCollector::validate_sensor_id(&"x".repeat(256)));
+    }
+
+    #[test]
+    fn test_validate_data_type() {
+        assert!(TelemetryCollector::validate_data_type("temperature"));
+        assert!(TelemetryCollector::validate_data_type("t"));
+        assert!(!TelemetryCollector::validate_data_type(""));
+        assert!(!TelemetryCollector::validate_data_type(&"x".repeat(101)));
+    }
+
+    #[test]
+    fn test_collect_with_extreme_values() {
+        let (db, db_path) = setup_test_db();
+        let collector = TelemetryCollector::new(db, "device-1".to_string());
+
+        let extreme_values = vec![
+            f64::MIN_POSITIVE,
+            f64::MAX,
+            0.0,
+            -1000.0,
+            1000.0,
+        ];
+
+        for value in extreme_values {
+            let result = collector.collect_sensor_data("sensor-1", "value", value, None);
+            assert!(result.is_ok());
+        }
+
+        let pending_count = collector.get_pending_count().expect("Failed to get pending count");
+        assert_eq!(pending_count, 5);
+
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn test_collect_batch_empty() {
+        let (db, db_path) = setup_test_db();
+        let collector = TelemetryCollector::new(db, "device-1".to_string());
+
+        let readings: Vec<(String, String, f64, Option<String>)> = vec![];
+        let result = collector.collect_batch(readings);
+        assert!(result.is_ok());
+
+        let collected = result.unwrap();
+        assert_eq!(collected.len(), 0);
+
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn test_collect_batch_large() {
+        let (db, db_path) = setup_test_db();
+        let collector = TelemetryCollector::new(db, "device-1".to_string());
+
+        let mut readings = Vec::new();
+        for i in 0..100 {
+            readings.push((
+                format!("sensor-{}", i),
+                "temperature".to_string(),
+                20.0 + (i as f64),
+                Some("celsius".to_string()),
+            ));
+        }
+
+        let result = collector.collect_batch(readings);
+        assert!(result.is_ok());
+
+        let collected = result.unwrap();
+        assert_eq!(collected.len(), 100);
+
+        let pending_count = collector.get_pending_count().expect("Failed to get pending count");
+        assert_eq!(pending_count, 100);
+
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn test_collect_data_uniqueness() {
+        let (db, db_path) = setup_test_db();
+        let collector = TelemetryCollector::new(db, "device-1".to_string());
+
+        let data1 = collector.collect_sensor_data("sensor-1", "temperature", 25.5, None)
+            .expect("Failed to collect");
+        let data2 = collector.collect_sensor_data("sensor-1", "temperature", 25.5, None)
+            .expect("Failed to collect");
+
+        // IDs should be unique
+        assert_ne!(data1.id, data2.id);
+
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn test_collect_with_special_characters_in_metadata() {
+        let (db, db_path) = setup_test_db();
+        let collector = TelemetryCollector::new(db, "device-1".to_string());
+
+        let mut metadata = HashMap::new();
+        metadata.insert("location".to_string(), serde_json::json!("room-1/zone-A"));
+        metadata.insert("description".to_string(), serde_json::json!("Test with special chars: !@#$%"));
+
+        let result = collector.collect_sensor_data_with_metadata(
+            "sensor-1",
+            "temperature",
+            25.5,
+            Some("celsius".to_string()),
+            Some(metadata),
+        );
+        assert!(result.is_ok());
+
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn test_collect_multiple_devices() {
+        let (db, db_path) = setup_test_db();
+        let collector1 = TelemetryCollector::new(db, "device-1".to_string());
+
+        let result1 = collector1.collect_sensor_data("sensor-1", "temperature", 25.5, None);
+        assert!(result1.is_ok());
+
+        let data1 = result1.unwrap();
+        assert_eq!(data1.device_id, "device-1");
+
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn test_collect_batch_mixed_units() {
+        let (db, db_path) = setup_test_db();
+        let collector = TelemetryCollector::new(db, "device-1".to_string());
+
+        let readings = vec![
+            ("sensor-1".to_string(), "temperature".to_string(), 25.5, Some("celsius".to_string())),
+            ("sensor-2".to_string(), "humidity".to_string(), 60.0, Some("%".to_string())),
+            ("sensor-3".to_string(), "pressure".to_string(), 1013.25, Some("hPa".to_string())),
+            ("sensor-4".to_string(), "count".to_string(), 42.0, None),
+        ];
+
+        let result = collector.collect_batch(readings);
+        assert!(result.is_ok());
+
+        let collected = result.unwrap();
+        assert_eq!(collected.len(), 4);
+        assert_eq!(collected[0].unit, Some("celsius".to_string()));
+        assert_eq!(collected[3].unit, None);
+
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn test_pending_count_after_collection() {
+        let (db, db_path) = setup_test_db();
+        let collector = TelemetryCollector::new(db, "device-1".to_string());
+
+        assert_eq!(collector.get_pending_count().unwrap(), 0);
+
+        collector.collect_sensor_data("sensor-1", "temperature", 25.5, None).unwrap();
+        assert_eq!(collector.get_pending_count().unwrap(), 1);
+
+        collector.collect_sensor_data("sensor-2", "humidity", 60.0, None).unwrap();
+        assert_eq!(collector.get_pending_count().unwrap(), 2);
+
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn test_collect_with_negative_values() {
+        let (db, db_path) = setup_test_db();
+        let collector = TelemetryCollector::new(db, "device-1".to_string());
+
+        let result = collector.collect_sensor_data("sensor-1", "temperature", -40.0, Some("celsius".to_string()));
+        assert!(result.is_ok());
+
+        let data = result.unwrap();
+        assert_eq!(data.value, -40.0);
+
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn test_collect_with_zero_value() {
+        let (db, db_path) = setup_test_db();
+        let collector = TelemetryCollector::new(db, "device-1".to_string());
+
+        let result = collector.collect_sensor_data("sensor-1", "temperature", 0.0, Some("celsius".to_string()));
+        assert!(result.is_ok());
+
+        let data = result.unwrap();
+        assert_eq!(data.value, 0.0);
 
         let _ = fs::remove_file(db_path);
     }

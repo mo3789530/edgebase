@@ -151,6 +151,81 @@ impl Database {
         )?;
         Ok(())
     }
+
+    pub fn update_telemetry(&self, id: &str, value: f64, version: i32) -> Result<()> {
+        let rows = self.conn.execute(
+            "UPDATE telemetry_data SET value = ?1, version = ?2 WHERE id = ?3",
+            params![value, version, id],
+        )?;
+        if rows == 0 {
+            anyhow::bail!("Record not found");
+        }
+        Ok(())
+    }
+
+    pub fn delete_telemetry(&self, id: &str) -> Result<()> {
+        let rows = self.conn.execute(
+            "DELETE FROM telemetry_data WHERE id = ?1",
+            params![id],
+        )?;
+        if rows == 0 {
+            anyhow::bail!("Record not found");
+        }
+        Ok(())
+    }
+
+    pub fn get_telemetry_by_id(&self, id: &str) -> Result<Option<TelemetryData>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT id, device_id, sensor_id, timestamp, data_type, value, unit, metadata, version
+               FROM telemetry_data WHERE id = ?1"#,
+        )?;
+
+        let result = stmt.query_row(params![id], |row| {
+            Ok(TelemetryData {
+                id: row.get(0)?,
+                device_id: row.get(1)?,
+                sensor_id: row.get(2)?,
+                timestamp: chrono::DateTime::from_timestamp(row.get(3)?, 0).unwrap_or_default(),
+                data_type: row.get(4)?,
+                value: row.get(5)?,
+                unit: row.get(6)?,
+                metadata: row.get::<_, Option<String>>(7)?.and_then(|s| serde_json::from_str(&s).ok()),
+                version: row.get(8)?,
+            })
+        });
+
+        match result {
+            Ok(data) => Ok(Some(data)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn get_synced_records(&self, limit: usize) -> Result<Vec<TelemetryData>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT id, device_id, sensor_id, timestamp, data_type, value, unit, metadata, version
+               FROM telemetry_data 
+               WHERE sync_status = 'synced'
+               ORDER BY sync_timestamp DESC
+               LIMIT ?1"#,
+        )?;
+
+        let rows = stmt.query_map(params![limit], |row| {
+            Ok(TelemetryData {
+                id: row.get(0)?,
+                device_id: row.get(1)?,
+                sensor_id: row.get(2)?,
+                timestamp: chrono::DateTime::from_timestamp(row.get(3)?, 0).unwrap_or_default(),
+                data_type: row.get(4)?,
+                value: row.get(5)?,
+                unit: row.get(6)?,
+                metadata: row.get::<_, Option<String>>(7)?.and_then(|s| serde_json::from_str(&s).ok()),
+                version: row.get(8)?,
+            })
+        })?;
+
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
 }
 
 #[cfg(test)]
@@ -399,6 +474,209 @@ mod tests {
         
         let pending = db.get_pending_records(10).expect("Failed to get pending records");
         assert_eq!(pending[0].version, 3);
+        
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn test_update_telemetry() {
+        let (db, db_path) = setup_test_db();
+        
+        let data = TelemetryData {
+            id: "test-1".to_string(),
+            device_id: "device-1".to_string(),
+            sensor_id: "sensor-1".to_string(),
+            timestamp: Utc::now(),
+            data_type: "temperature".to_string(),
+            value: 25.5,
+            unit: None,
+            metadata: None,
+            version: 1,
+        };
+
+        db.insert_telemetry(&data).expect("Failed to insert");
+        
+        let result = db.update_telemetry("test-1", 30.0, 2);
+        assert!(result.is_ok());
+
+        let record = db.get_telemetry_by_id("test-1").expect("Failed to get record");
+        assert!(record.is_some());
+        let record = record.unwrap();
+        assert_eq!(record.value, 30.0);
+        assert_eq!(record.version, 2);
+        
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn test_update_nonexistent_record() {
+        let (db, db_path) = setup_test_db();
+        
+        let result = db.update_telemetry("nonexistent", 30.0, 2);
+        assert!(result.is_err());
+        
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn test_delete_telemetry() {
+        let (db, db_path) = setup_test_db();
+        
+        let data = TelemetryData {
+            id: "test-1".to_string(),
+            device_id: "device-1".to_string(),
+            sensor_id: "sensor-1".to_string(),
+            timestamp: Utc::now(),
+            data_type: "temperature".to_string(),
+            value: 25.5,
+            unit: None,
+            metadata: None,
+            version: 1,
+        };
+
+        db.insert_telemetry(&data).expect("Failed to insert");
+        
+        let result = db.delete_telemetry("test-1");
+        assert!(result.is_ok());
+
+        let record = db.get_telemetry_by_id("test-1").expect("Failed to get record");
+        assert!(record.is_none());
+        
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn test_delete_nonexistent_record() {
+        let (db, db_path) = setup_test_db();
+        
+        let result = db.delete_telemetry("nonexistent");
+        assert!(result.is_err());
+        
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn test_get_telemetry_by_id() {
+        let (db, db_path) = setup_test_db();
+        
+        let data = TelemetryData {
+            id: "test-1".to_string(),
+            device_id: "device-1".to_string(),
+            sensor_id: "sensor-1".to_string(),
+            timestamp: Utc::now(),
+            data_type: "temperature".to_string(),
+            value: 25.5,
+            unit: Some("celsius".to_string()),
+            metadata: None,
+            version: 1,
+        };
+
+        db.insert_telemetry(&data).expect("Failed to insert");
+        
+        let record = db.get_telemetry_by_id("test-1").expect("Failed to get record");
+        assert!(record.is_some());
+        let record = record.unwrap();
+        assert_eq!(record.id, "test-1");
+        assert_eq!(record.value, 25.5);
+        
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn test_get_nonexistent_telemetry() {
+        let (db, db_path) = setup_test_db();
+        
+        let record = db.get_telemetry_by_id("nonexistent").expect("Failed to get record");
+        assert!(record.is_none());
+        
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn test_get_synced_records() {
+        let (db, db_path) = setup_test_db();
+        
+        for i in 0..3 {
+            let data = TelemetryData {
+                id: format!("test-{}", i),
+                device_id: "device-1".to_string(),
+                sensor_id: "sensor-1".to_string(),
+                timestamp: Utc::now(),
+                data_type: "temperature".to_string(),
+                value: 20.0 + i as f64,
+                unit: None,
+                metadata: None,
+                version: 1,
+            };
+            db.insert_telemetry(&data).expect("Failed to insert");
+        }
+
+        db.mark_as_synced(&["test-0".to_string(), "test-1".to_string()]).expect("Failed to mark as synced");
+        
+        let synced = db.get_synced_records(10).expect("Failed to get synced records");
+        assert_eq!(synced.len(), 2);
+        
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn test_concurrent_transaction_isolation() {
+        let (db, db_path) = setup_test_db();
+        
+        for i in 0..5 {
+            let data = TelemetryData {
+                id: format!("test-{}", i),
+                device_id: "device-1".to_string(),
+                sensor_id: "sensor-1".to_string(),
+                timestamp: Utc::now(),
+                data_type: "temperature".to_string(),
+                value: 20.0 + i as f64,
+                unit: None,
+                metadata: None,
+                version: 1,
+            };
+            db.insert_telemetry(&data).expect("Failed to insert");
+        }
+
+        let result = db.mark_as_synced(&["test-0".to_string(), "test-2".to_string()]);
+        assert!(result.is_ok());
+
+        let pending = db.get_pending_records(10).expect("Failed to get pending records");
+        assert_eq!(pending.len(), 3);
+        
+        let synced = db.get_synced_records(10).expect("Failed to get synced records");
+        assert_eq!(synced.len(), 2);
+        
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn test_mixed_operations_consistency() {
+        let (db, db_path) = setup_test_db();
+        
+        let data = TelemetryData {
+            id: "test-1".to_string(),
+            device_id: "device-1".to_string(),
+            sensor_id: "sensor-1".to_string(),
+            timestamp: Utc::now(),
+            data_type: "temperature".to_string(),
+            value: 25.5,
+            unit: None,
+            metadata: None,
+            version: 1,
+        };
+
+        db.insert_telemetry(&data).expect("Failed to insert");
+        db.update_telemetry("test-1", 30.0, 2).expect("Failed to update");
+        
+        let record = db.get_telemetry_by_id("test-1").expect("Failed to get record");
+        assert!(record.is_some());
+        assert_eq!(record.unwrap().value, 30.0);
+        
+        db.mark_as_synced(&["test-1".to_string()]).expect("Failed to mark as synced");
+        
+        let pending = db.get_pending_records(10).expect("Failed to get pending records");
+        assert_eq!(pending.len(), 0);
         
         let _ = fs::remove_file(db_path);
     }
