@@ -12,11 +12,7 @@
   - 競合検出ロジック実装
   - 進捗: 100%
 
-- [x] 8. Sync API Gateway を実装
-  - RESTful API エンドポイント実装
-  - テレメトリ同期、コマンド配信 API
-  - control-plane に統合
-  - 進捗: 100%
+
 
 ## 進行中
 

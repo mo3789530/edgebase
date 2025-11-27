@@ -2,12 +2,13 @@ mod domain;
 mod application;
 mod infrastructure;
 mod presentation;
+mod config;
 
 use axum::{Router, routing::{any, get}, extract::State, http::Request, body::Body, response::IntoResponse};
 use std::sync::Arc;
-use uuid::Uuid;
 use std::time::Duration;
 
+use config::Config;
 use domain::NodeInfo;
 use infrastructure::{
     InMemoryFunctionRepository, InMemoryRouteRepository, InMemoryCacheRepository,
@@ -24,17 +25,15 @@ struct AppState {
 
 #[tokio::main]
 async fn main() {
-    let wasm_path = std::env::args().nth(1).expect("Usage: edge-runner <wasm_file>");
-    let cp_url = std::env::args().nth(2).unwrap_or_else(|| "http://localhost:8080".to_string());
+    let config = Config::from_env();
     
+    let wasm_path = std::env::args().nth(1).expect("Usage: edge-runner <wasm_file>");
     let wasm_bytes = std::fs::read(&wasm_path).expect("Failed to read WASM file");
     
-    let node_id = Uuid::new_v4().to_string();
-    let pop_id = "default-pop".to_string();
     let node_info = NodeInfo {
-        node_id: node_id.clone(),
-        pop_id: pop_id.clone(),
-        cp_url: cp_url.clone(),
+        node_id: config.node_id.clone(),
+        pop_id: config.pop_id.clone(),
+        cp_url: config.cp_url.clone(),
     };
     
     // Initialize repositories
@@ -42,12 +41,13 @@ async fn main() {
     let route_repo = Arc::new(InMemoryRouteRepository::new());
     let cache_repo = Arc::new(InMemoryCacheRepository::new());
     
-    // Initialize cache (10 GB limit)
-    let wasm_cache = Arc::new(LocalWasmCache::new("/var/cache/wasm", 10 * 1024 * 1024 * 1024)
-        .unwrap_or_else(|_| LocalWasmCache::new("/tmp/wasm-cache", 10 * 1024 * 1024 * 1024).unwrap()));
+    // Initialize cache
+    let cache_size_bytes = config.cache_size_gb * 1024 * 1024 * 1024;
+    let wasm_cache = Arc::new(LocalWasmCache::new(&config.cache_dir, cache_size_bytes)
+        .unwrap_or_else(|_| LocalWasmCache::new("/tmp/wasm-cache", cache_size_bytes).unwrap()));
     
     // Initialize pool
-    let pool = Arc::new(HotInstancePool::new(10, 300));
+    let pool = Arc::new(HotInstancePool::new(config.max_hot_instances, config.idle_timeout_secs));
     
     // Initialize services
     let function_service = Arc::new(FunctionService::new(
@@ -57,7 +57,7 @@ async fn main() {
         pool.clone(),
     ));
     
-    let cp_client = Arc::new(ControlPlaneClient::new(cp_url));
+    let cp_client = Arc::new(ControlPlaneClient::new(config.cp_url.clone()));
     let heartbeat_service = Arc::new(HeartbeatService::new(
         cp_client,
         function_service.clone(),
@@ -85,8 +85,9 @@ async fn main() {
     // Start heartbeat task
     let heartbeat_state = state_arc.clone();
     let node_info_clone = node_info.clone();
+    let heartbeat_interval = Duration::from_secs(config.heartbeat_interval_secs);
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        let mut interval = tokio::time::interval(heartbeat_interval);
         loop {
             interval.tick().await;
             match heartbeat_state.heartbeat_service.send_heartbeat(&node_info_clone).await {
@@ -104,8 +105,9 @@ async fn main() {
         .route("/*path", any(handler))
         .with_state(state_arc);
     
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    println!("Edge Runner listening on http://0.0.0.0:3000 (node_id: {})", node_id);
+    let bind_addr = format!("{}:{}", config.listen_addr, config.listen_port);
+    let listener = tokio::net::TcpListener::bind(&bind_addr).await.unwrap();
+    println!("Edge Runner listening on http://{} (node_id: {})", bind_addr, config.node_id);
     axum::serve(listener, app).await.unwrap();
 }
 
