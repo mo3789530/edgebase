@@ -1,0 +1,245 @@
+openapi: 3.0.0
+info:
+  title: EdgeBase Control Plane API
+  version: 1.0.0
+  description: API for managing edge nodes, functions, and deployments
+
+servers:
+  - url: http://localhost:8000/api/v1
+    description: Development server
+
+paths:
+  /nodes/register:
+    post:
+      summary: Register a new node
+      tags:
+        - Nodes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 255
+                region:
+                  type: string
+                  minLength: 1
+                  maxLength: 255
+      responses:
+        '201':
+          description: Node registered successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  node:
+                    $ref: '#/components/schemas/Node'
+                  token:
+                    type: string
+
+  /nodes/{id}/heartbeat:
+    post:
+      summary: Send heartbeat from node
+      tags:
+        - Nodes
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Heartbeat received
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+
+  /functions:
+    post:
+      summary: Create a new function
+      tags:
+        - Functions
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                entrypoint:
+                  type: string
+                runtime:
+                  type: string
+                memory_pages:
+                  type: integer
+                max_execution_ms:
+                  type: integer
+      responses:
+        '201':
+          description: Function created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Function'
+
+  /functions/{id}:
+    get:
+      summary: Get function details
+      tags:
+        - Functions
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Function details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Function'
+
+  /routes:
+    get:
+      summary: List routes
+      tags:
+        - Routes
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: List of routes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedResponse'
+
+  /health:
+    get:
+      summary: Health check
+      tags:
+        - Health
+      responses:
+        '200':
+          description: Service is healthy
+
+  /health/ready:
+    get:
+      summary: Readiness probe
+      tags:
+        - Health
+      responses:
+        '200':
+          description: Service is ready
+
+  /health/live:
+    get:
+      summary: Liveness probe
+      tags:
+        - Health
+      responses:
+        '200':
+          description: Service is alive
+
+  /metrics:
+    get:
+      summary: Get metrics
+      tags:
+        - Metrics
+      responses:
+        '200':
+          description: Service metrics
+
+components:
+  schemas:
+    Node:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        region:
+          type: string
+        status:
+          type: string
+          enum: [online, offline, syncing]
+        created_at:
+          type: string
+          format: date-time
+
+    Function:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        version:
+          type: string
+        entrypoint:
+          type: string
+        runtime:
+          type: string
+        memory_pages:
+          type: integer
+        max_execution_ms:
+          type: integer
+
+    PaginatedResponse:
+      type: object
+      properties:
+        data:
+          type: array
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+        page:
+          type: integer
+        total_pages:
+          type: integer
+
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
