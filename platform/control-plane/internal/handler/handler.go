@@ -1,8 +1,11 @@
 package handler
 
 import (
+	"net/http"
+
 	"github.com/edgebase/platform/control-plane/internal/service"
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 )
 
 type Handler struct {
@@ -75,5 +78,21 @@ func (h *Handler) RegisterRoutes(app *fiber.App) {
 	// Device endpoints
 	devices := api.Group("/devices")
 	devices.Post("/register", h.RegisterDevice)
+}
+
+// parseUUID extracts and validates UUID from route parameter
+func (h *Handler) parseUUID(c *fiber.Ctx, param string) (uuid.UUID, error) {
+	idStr := c.Params(param)
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "invalid id"})
+		return uuid.Nil, err
+	}
+	return id, nil
+}
+
+// errorResponse sends a JSON error response
+func errorResponse(c *fiber.Ctx, status int, message string) error {
+	return c.Status(status).JSON(fiber.Map{"error": message})
 }
 

@@ -16,11 +16,11 @@ type RegisterSchemaRequest struct {
 func (h *Handler) RegisterSchema(c *fiber.Ctx) error {
 	var req RegisterSchemaRequest
 	if err := c.BodyParser(&req); err != nil {
-		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "invalid request"})
+		return errorResponse(c, http.StatusBadRequest, "invalid request")
 	}
 
 	if err := h.schemaSvc.RegisterSchema(c.Context(), req.Version, req.UpSQL, req.DownSQL, req.Description); err != nil {
-		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		return errorResponse(c, http.StatusInternalServerError, err.Error())
 	}
 
 	return c.Status(http.StatusCreated).JSON(fiber.Map{"message": "schema registered"})
@@ -29,7 +29,7 @@ func (h *Handler) RegisterSchema(c *fiber.Ctx) error {
 func (h *Handler) ListSchemas(c *fiber.Ctx) error {
 	schemas, err := h.schemaSvc.ListSchemas(c.Context())
 	if err != nil {
-		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		return errorResponse(c, http.StatusInternalServerError, err.Error())
 	}
 
 	return c.JSON(schemas)

@@ -5,7 +5,6 @@ import (
 
 	"github.com/edgebase/platform/control-plane/internal/model"
 	"github.com/gofiber/fiber/v2"
-	"github.com/google/uuid"
 )
 
 type BatchResult struct {
@@ -15,7 +14,7 @@ type BatchResult struct {
 }
 
 type CommandAck struct {
-	Success   bool `json:"success"`
+	Success   bool   `json:"success"`
 	Timestamp string `json:"timestamp"`
 }
 
@@ -28,39 +27,29 @@ type DeviceRegistration struct {
 func (h *Handler) SyncTelemetry(c *fiber.Ctx) error {
 	var batch []model.TelemetryData
 	if err := c.BodyParser(&batch); err != nil {
-		return c.Status(http.StatusBadRequest).JSON(BatchResult{
-			Success:  false,
-			Inserted: 0,
-			Failed:   0,
-		})
+		return c.Status(http.StatusBadRequest).JSON(BatchResult{Success: false})
 	}
 
 	if len(batch) == 0 {
-		return c.Status(http.StatusBadRequest).JSON(BatchResult{
-			Success:  false,
-			Inserted: 0,
-			Failed:   0,
-		})
+		return c.Status(http.StatusBadRequest).JSON(BatchResult{Success: false})
 	}
 
 	inserted, err := h.telemetrySvc.SyncTelemetry(c.Context(), batch)
 	if err != nil {
 		return c.Status(http.StatusInternalServerError).JSON(BatchResult{
-			Success:  false,
-			Inserted: 0,
-			Failed:   len(batch),
+			Success: false,
+			Failed:  len(batch),
 		})
 	}
 
 	return c.Status(http.StatusOK).JSON(BatchResult{
 		Success:  true,
 		Inserted: inserted,
-		Failed:   0,
 	})
 }
 
 func (h *Handler) GetCommands(c *fiber.Ctx) error {
-	deviceID, err := uuid.Parse(c.Params("device_id"))
+	deviceID, err := h.parseUUID(c, "device_id")
 	if err != nil {
 		return c.Status(http.StatusBadRequest).JSON([]model.Command{})
 	}
@@ -74,7 +63,7 @@ func (h *Handler) GetCommands(c *fiber.Ctx) error {
 }
 
 func (h *Handler) AckCommand(c *fiber.Ctx) error {
-	commandID, err := uuid.Parse(c.Params("command_id"))
+	commandID, err := h.parseUUID(c, "command_id")
 	if err != nil {
 		return c.SendStatus(http.StatusBadRequest)
 	}
@@ -92,7 +81,7 @@ func (h *Handler) AckCommand(c *fiber.Ctx) error {
 }
 
 func (h *Handler) GetSyncStatus(c *fiber.Ctx) error {
-	deviceID, err := uuid.Parse(c.Params("device_id"))
+	deviceID, err := h.parseUUID(c, "device_id")
 	if err != nil {
 		return c.Status(http.StatusBadRequest).JSON(nil)
 	}
@@ -108,12 +97,12 @@ func (h *Handler) GetSyncStatus(c *fiber.Ctx) error {
 func (h *Handler) RegisterDevice(c *fiber.Ctx) error {
 	var reg DeviceRegistration
 	if err := c.BodyParser(&reg); err != nil {
-		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+		return errorResponse(c, http.StatusBadRequest, err.Error())
 	}
 
 	deviceID, err := h.telemetrySvc.RegisterDevice(c.Context(), reg.DeviceName, reg.DeviceType, reg.Location)
 	if err != nil {
-		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		return errorResponse(c, http.StatusInternalServerError, err.Error())
 	}
 
 	return c.Status(http.StatusCreated).JSON(fiber.Map{"device_id": deviceID})

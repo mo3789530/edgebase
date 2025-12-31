@@ -16,12 +16,12 @@ func (h *Handler) CreateRoute(c *fiber.Ctx) error {
 		PopSelector *string  `json:"pop_selector"`
 	}
 	if err := c.BodyParser(&req); err != nil {
-		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "invalid request"})
+		return errorResponse(c, http.StatusBadRequest, "invalid request")
 	}
 
 	route, err := h.syncSvc.CreateRoute(c.Context(), req.Host, req.Path, req.FunctionID, req.Methods, req.Priority, req.PopSelector)
 	if err != nil {
-		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		return errorResponse(c, http.StatusInternalServerError, err.Error())
 	}
 
 	return c.Status(http.StatusCreated).JSON(route)
@@ -30,7 +30,7 @@ func (h *Handler) CreateRoute(c *fiber.Ctx) error {
 func (h *Handler) ListRoutes(c *fiber.Ctx) error {
 	routes, err := h.syncSvc.ListRoutes(c.Context())
 	if err != nil {
-		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		return errorResponse(c, http.StatusInternalServerError, err.Error())
 	}
 
 	return c.JSON(routes)

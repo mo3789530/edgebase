@@ -16,12 +16,12 @@ type RegisterNodeRequest struct {
 func (h *Handler) RegisterNode(c *fiber.Ctx) error {
 	var req RegisterNodeRequest
 	if err := c.BodyParser(&req); err != nil {
-		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "invalid request"})
+		return errorResponse(c, http.StatusBadRequest, "invalid request")
 	}
 
 	node, token, err := h.nodeSvc.RegisterNode(c.Context(), req.Name, req.Region)
 	if err != nil {
-		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		return errorResponse(c, http.StatusInternalServerError, err.Error())
 	}
 
 	return c.Status(http.StatusCreated).JSON(fiber.Map{
@@ -31,24 +31,22 @@ func (h *Handler) RegisterNode(c *fiber.Ctx) error {
 }
 
 func (h *Handler) Heartbeat(c *fiber.Ctx) error {
-	idStr := c.Params("id")
-	id, err := uuid.Parse(idStr)
+	id, err := h.parseUUID(c, "id")
 	if err != nil {
-		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "invalid node id"})
+		return err
 	}
 
 	if err := h.nodeSvc.Heartbeat(c.Context(), id); err != nil {
-		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		return errorResponse(c, http.StatusInternalServerError, err.Error())
 	}
 
 	return c.JSON(fiber.Map{"status": "ok"})
 }
 
 func (h *Handler) GetSyncInfo(c *fiber.Ctx) error {
-	idStr := c.Params("id")
-	id, err := uuid.Parse(idStr)
+	id, err := h.parseUUID(c, "id")
 	if err != nil {
-		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "invalid node id"})
+		return err
 	}
 
 	var currentState service.NodeState
@@ -58,17 +56,16 @@ func (h *Handler) GetSyncInfo(c *fiber.Ctx) error {
 
 	plan, err := h.syncSvc.GetSyncPlan(c.Context(), id, currentState)
 	if err != nil {
-		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		return errorResponse(c, http.StatusInternalServerError, err.Error())
 	}
 
 	return c.JSON(plan)
 }
 
 func (h *Handler) AckSync(c *fiber.Ctx) error {
-	idStr := c.Params("id")
-	id, err := uuid.Parse(idStr)
+	id, err := h.parseUUID(c, "id")
 	if err != nil {
-		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "invalid node id"})
+		return err
 	}
 
 	var req struct {
@@ -76,11 +73,11 @@ func (h *Handler) AckSync(c *fiber.Ctx) error {
 		Result service.SyncResult `json:"result"`
 	}
 	if err := c.BodyParser(&req); err != nil {
-		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "invalid request"})
+		return errorResponse(c, http.StatusBadRequest, "invalid request")
 	}
 
 	if err := h.syncSvc.AcknowledgeSync(c.Context(), id, req.SyncID, req.Result); err != nil {
-		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		return errorResponse(c, http.StatusInternalServerError, err.Error())
 	}
 
 	return c.JSON(fiber.Map{"status": "acked"})
