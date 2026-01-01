@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/edgebase/platform/control-plane/internal/auth"
 	"github.com/edgebase/platform/control-plane/internal/model"
 	"github.com/edgebase/platform/control-plane/internal/service"
 	"github.com/gofiber/fiber/v2"
@@ -149,7 +151,8 @@ func TestRegisterNode(t *testing.T) {
 	mockSchemaSvc := new(MockSchemaService)
 	mockTelemetrySvc := new(MockTelemetryService)
 
-	h := NewHandler(mockNodeSvc, mockSyncSvc, mockArtifactSvc, mockSchemaSvc, mockTelemetrySvc)
+	authMgr := auth.NewManager("test-secret")
+	h := NewHandler(mockNodeSvc, mockSyncSvc, mockArtifactSvc, mockSchemaSvc, mockTelemetrySvc, authMgr, time.Hour)
 	app := fiber.New()
 	h.RegisterRoutes(app)
 
@@ -173,7 +176,12 @@ func TestRegisterNode(t *testing.T) {
 
 		var respBody map[string]interface{}
 		json.NewDecoder(resp.Body).Decode(&respBody)
-		assert.Equal(t, token, respBody["token"])
+		assert.NotEmpty(t, respBody["token"])
+		
+		tokenStr, ok := respBody["token"].(string)
+		assert.True(t, ok)
+		_, err = authMgr.VerifyToken(tokenStr)
+		assert.NoError(t, err)
 
 		mockNodeSvc.AssertExpectations(t)
 	})
