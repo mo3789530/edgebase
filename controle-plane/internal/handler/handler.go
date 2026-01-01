@@ -51,8 +51,8 @@ func (h *Handler) RegisterRoutes(app *fiber.App) {
 	nodes.Post("/:id/sync/ack", auth.AuthMiddleware(h.authMgr), h.AckSync)
 
 	// Auth endpoints
-	auth := api.Group("/auth")
-	auth.Post("/refresh", h.RefreshToken)
+	authGroup := api.Group("/auth")
+	authGroup.Post("/refresh", h.RefreshToken)
 
 	// Function (WASM) endpoints (require auth)
 	funcs := api.Group("/functions", auth.AuthMiddleware(h.authMgr))

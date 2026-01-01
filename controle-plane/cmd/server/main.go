@@ -16,7 +16,6 @@ import (
 	"github.com/edgebase/platform/control-plane/internal/handler"
 	"github.com/edgebase/platform/control-plane/internal/logger"
 	"github.com/edgebase/platform/control-plane/internal/metrics"
-	"github.com/edgebase/platform/control-plane/internal/migration"
 	"github.com/edgebase/platform/control-plane/internal/model"
 	"github.com/edgebase/platform/control-plane/internal/mqtt"
 	"github.com/edgebase/platform/control-plane/internal/ratelimit"
@@ -93,10 +92,10 @@ func main() {
 	schemaSvc := service.NewSchemaService(schemaRepo)
 	syncSvc := service.NewSyncService(syncRepo, nodeRepo, funcRepo, schemaRepo, artifactSvc)
 	telemetrySvc := service.NewTelemetryService(telemetryRepo)
-	auditSvc := service.NewAuditService(dbConn)
+	_ = service.NewAuditService(dbConn)
 
 	// Initialize cache (5 minute TTL)
-	appCache := cache.New(5 * time.Minute)
+	_ = cache.New(5 * time.Minute)
 
 	// Initialize logger
 	logger.Init("INFO")

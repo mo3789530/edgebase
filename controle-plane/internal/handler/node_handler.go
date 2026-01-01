@@ -31,10 +31,14 @@ func (h *Handler) RegisterNode(c *fiber.Ctx) error {
 
 	if !v.IsValid() {
 		logger.Warn(requestID, "validation_failed", nil, v.ErrorMap())
-		return errors.BadRequest(c, "validation failed", v.ErrorMap())
+		errs := make(map[string]interface{})
+		for k, v := range v.ErrorMap() {
+			errs[k] = v
+		}
+		return errors.BadRequest(c, "validation failed", errs)
 	}
 
-	node, err := h.nodeSvc.RegisterNode(c.Context(), req.Name, req.Region)
+	node, _, err := h.nodeSvc.RegisterNode(c.Context(), req.Name, req.Region)
 	if err != nil {
 		logger.Error(requestID, "register_node_failed", err)
 		return errors.InternalError(c, "failed to register node")
