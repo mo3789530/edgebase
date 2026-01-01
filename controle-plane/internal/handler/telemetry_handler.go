@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 
+	"github.com/edgebase/platform/control-plane/internal/errors"
 	"github.com/edgebase/platform/control-plane/internal/model"
 	"github.com/gofiber/fiber/v2"
 )
@@ -97,12 +98,12 @@ func (h *Handler) GetSyncStatus(c *fiber.Ctx) error {
 func (h *Handler) RegisterDevice(c *fiber.Ctx) error {
 	var reg DeviceRegistration
 	if err := c.BodyParser(&reg); err != nil {
-		return errorResponse(c, http.StatusBadRequest, err.Error())
+		return errors.BadRequest(c, err.Error(), nil)
 	}
 
 	deviceID, err := h.telemetrySvc.RegisterDevice(c.Context(), reg.DeviceName, reg.DeviceType, reg.Location)
 	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err.Error())
+		return errors.InternalError(c, err.Error())
 	}
 
 	return c.Status(http.StatusCreated).JSON(fiber.Map{"device_id": deviceID})

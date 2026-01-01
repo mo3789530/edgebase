@@ -30,7 +30,11 @@ func (h *Handler) CreateFunction(c *fiber.Ctx) error {
 
 	if !v.IsValid() {
 		logger.Warn(requestID, "validation_failed", nil, v.ErrorMap())
-		return errors.BadRequest(c, "validation failed", v.ErrorMap())
+		errs := make(map[string]interface{})
+		for k, v := range v.ErrorMap() {
+			errs[k] = v
+		}
+		return errors.BadRequest(c, "validation failed", errs)
 	}
 
 	fn, err := h.artifactSvc.CreateFunction(c.Context(), req.Name, req.Entrypoint, req.Runtime, req.MemoryPages, req.MaxExecutionMs)

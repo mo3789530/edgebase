@@ -31,7 +31,11 @@ func (h *Handler) CreateRoute(c *fiber.Ctx) error {
 	v.Required("function_id", req.FunctionID).MinLength("function_id", req.FunctionID, 1)
 	if !v.IsValid() {
 		logger.Warn(requestID, "validation_failed", nil, v.ErrorMap())
-		return errors.BadRequest(c, "validation failed", v.ErrorMap())
+		errs := make(map[string]interface{})
+		for k, v := range v.ErrorMap() {
+			errs[k] = v
+		}
+		return errors.BadRequest(c, "validation failed", errs)
 	}
 
 	route, err := h.syncSvc.CreateRoute(c.Context(), req.Host, req.Path, req.FunctionID, req.Methods, req.Priority, req.PopSelector)
@@ -52,12 +56,13 @@ func (h *Handler) ListRoutes(c *fiber.Ctx) error {
 	requestID := logger.GetRequestID(c)
 	params := pagination.ParseParams(c)
 
-	routes, err := h.syncSvc.ListRoutes(c.Context())
+	routesInterface, err := h.syncSvc.ListRoutes(c.Context())
 	if err != nil {
 		logger.Error(requestID, "list_routes_failed", err)
 		return errors.InternalError(c, "failed to list routes")
 	}
 
+	routes := routesInterface.([]interface{})
 	total := int64(len(routes))
 	start := params.Offset
 	end := params.Offset + params.Limit

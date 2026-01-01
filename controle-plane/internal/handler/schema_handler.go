@@ -29,7 +29,11 @@ func (h *Handler) RegisterSchema(c *fiber.Ctx) error {
 	v.Required("up_sql", req.UpSQL).MinLength("up_sql", req.UpSQL, 1)
 	if !v.IsValid() {
 		logger.Warn(requestID, "validation_failed", nil, v.ErrorMap())
-		return errors.BadRequest(c, "validation failed", v.ErrorMap())
+		errs := make(map[string]interface{})
+		for k, v := range v.ErrorMap() {
+			errs[k] = v
+		}
+		return errors.BadRequest(c, "validation failed", errs)
 	}
 
 	if err := h.schemaSvc.RegisterSchema(c.Context(), req.Version, req.UpSQL, req.DownSQL, req.Description); err != nil {

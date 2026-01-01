@@ -3,7 +3,6 @@ package logger
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"time"
 )
