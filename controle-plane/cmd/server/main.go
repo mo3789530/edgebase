@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"time"
 
@@ -62,10 +63,19 @@ func main() {
 		log.Fatalf("failed to migrate DB: %v", err)
 	}
 
-	// Initialize MinIO client
-	minioClient, err := storage.Init(cfg.MinIOEndpoint, cfg.MinIOAccessKey, cfg.MinIOSecretKey, cfg.MinIOBucket)
-	if err != nil {
-		log.Fatalf("failed to init MinIO: %v", err)
+	// Initialize Storage client
+	var storageClient storage.Client
+	if cfg.S3Enabled {
+		storageClient, err = storage.InitS3(context.Background(), cfg.S3Region, cfg.S3AccessKey, cfg.S3SecretKey, cfg.S3Bucket)
+		if err != nil {
+			log.Fatalf("failed to init S3: %v", err)
+		}
+		log.Println("Connected to S3")
+	} else {
+		storageClient, err = storage.Init(cfg.MinIOEndpoint, cfg.MinIOAccessKey, cfg.MinIOSecretKey, cfg.MinIOBucket)
+		if err != nil {
+			log.Fatalf("failed to init MinIO: %v", err)
+		}
 	}
 
 	// Initialize MQTT client (optional)
@@ -88,7 +98,7 @@ func main() {
 
 	// Initialize Services
 	nodeSvc := service.NewNodeService(nodeRepo)
-	artifactSvc := service.NewArtifactService(funcRepo, minioClient)
+	artifactSvc := service.NewArtifactService(funcRepo, storageClient)
 	schemaSvc := service.NewSchemaService(schemaRepo)
 	syncSvc := service.NewSyncService(syncRepo, nodeRepo, funcRepo, schemaRepo, artifactSvc)
 	telemetrySvc := service.NewTelemetryService(telemetryRepo)

@@ -24,14 +24,14 @@ type ArtifactService interface {
 }
 
 type artifactService struct {
-	repo        repository.FunctionRepository
-	minioClient *storage.MinIOClient
+	repo          repository.FunctionRepository
+	storageClient storage.Client
 }
 
-func NewArtifactService(repo repository.FunctionRepository, minioClient *storage.MinIOClient) ArtifactService {
+func NewArtifactService(repo repository.FunctionRepository, storageClient storage.Client) ArtifactService {
 	return &artifactService{
-		repo:        repo,
-		minioClient: minioClient,
+		repo:          repo,
+		storageClient: storageClient,
 	}
 }
 
@@ -48,7 +48,7 @@ func (s *artifactService) UploadFunction(ctx context.Context, name, version stri
 
 	// Upload to MinIO
 	objectName := fmt.Sprintf("%s/%s/function.wasm", name, version)
-	if err := s.minioClient.Upload(ctx, objectName, binary, "application/wasm"); err != nil {
+	if err := s.storageClient.Upload(ctx, objectName, binary, "application/wasm"); err != nil {
 		return nil, err
 	}
 
@@ -78,7 +78,7 @@ func (s *artifactService) GetDownloadURL(ctx context.Context, id uuid.UUID) (str
 		return "", err
 	}
 
-	return s.minioClient.GetPresignedURL(ctx, fn.MinioPath, 15*time.Minute)
+	return s.storageClient.GetPresignedURL(ctx, fn.MinioPath, 15*time.Minute)
 }
 
 func (s *artifactService) DeleteFunction(ctx context.Context, id uuid.UUID) error {
@@ -114,7 +114,7 @@ func (s *artifactService) UploadArtifact(ctx context.Context, id uuid.UUID, bina
 	hashStr := hex.EncodeToString(hash[:])
 
 	objectName := fmt.Sprintf("%s/%s/function.wasm", fn.Name, fn.Version)
-	if err := s.minioClient.Upload(ctx, objectName, binary, "application/wasm"); err != nil {
+	if err := s.storageClient.Upload(ctx, objectName, binary, "application/wasm"); err != nil {
 		return nil, err
 	}
 
@@ -141,5 +141,5 @@ func (s *artifactService) GetArtifactData(ctx context.Context, id, version strin
 		return nil, err
 	}
 
-	return s.minioClient.Download(ctx, fn.MinioPath)
+	return s.storageClient.Download(ctx, fn.MinioPath)
 }

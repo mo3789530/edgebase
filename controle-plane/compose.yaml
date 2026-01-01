@@ -1,0 +1,20 @@
+version: 3.8
+
+services:
+  rustfs:
+    image: rustfs/rustfs:latest
+    ports:
+      - "9010:9000"
+      - "9011:9001"
+    environment:
+      - RUSTFS_ADDRESS=0.0.0.0:9000
+      - RUSTFS_CONSOLE_ADDRESS=0.0.0.0:9001
+      - RUSTFS_ACCESS_KEY=rustfsadmin
+      - RUSTFS_SECRET_KEY=rustfsadmin
+      - RUSTFS_CONSOLE_ENABLE=true
+    volumes:
+      - rustfs-data:/data
+    command: ["--console-enable", "/data"]
+
+volumes:
+  rustfs-data:

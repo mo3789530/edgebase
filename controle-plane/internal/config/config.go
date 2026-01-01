@@ -14,6 +14,13 @@ type Config struct {
 	MinIOAccessKey    string
 	MinIOSecretKey    string
 	MinIOBucket       string
+	// AWS S3 Config
+	S3Enabled   bool
+	S3Region    string
+	S3AccessKey string
+	S3SecretKey string
+	S3Bucket    string
+
 	MQTTBroker        string
 	MQTTEnabled       bool
 	DBMaxOpenConns    int
@@ -33,6 +40,13 @@ func Load() (*Config, error) {
 		MinIOAccessKey:    getEnv("MINIO_ACCESS_KEY", "admin"),
 		MinIOSecretKey:    getEnv("MINIO_SECRET_KEY", "password"),
 		MinIOBucket:       getEnv("MINIO_BUCKET", "wasm-functions"),
+		
+		S3Enabled:   getEnvAsBool("S3_ENABLED", false),
+		S3Region:    getEnv("AWS_REGION", "us-east-1"),
+		S3AccessKey: getEnv("AWS_ACCESS_KEY_ID", ""),
+		S3SecretKey: getEnv("AWS_SECRET_ACCESS_KEY", ""),
+		S3Bucket:    getEnv("AWS_BUCKET", "wasm-functions"),
+
 		MQTTBroker:        getEnv("MQTT_BROKER", "tcp://localhost:1883"),
 		MQTTEnabled:       getEnvAsBool("MQTT_ENABLED", false),
 		DBMaxOpenConns:    getEnvAsInt("DB_MAX_OPEN_CONNS", 25),
