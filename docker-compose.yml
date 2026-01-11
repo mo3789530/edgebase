@@ -30,6 +30,25 @@ services:
       timeout: 5s
       retries: 5
 
+  influxdb:
+    image: influxdb:2
+    ports:
+      - "8086:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: password123
+      DOCKER_INFLUXDB_INIT_ORG: edgebase
+      DOCKER_INFLUXDB_INIT_BUCKET: metrics
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: my-super-secret-auth-token
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+    healthcheck:
+      test: "curl -f http://localhost:8086/health || exit 1"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
   sync-service:
     build:
       context: ./db
@@ -66,12 +85,23 @@ services:
         condition: service_healthy
       mqtt:
         condition: service_healthy
+      influxdb:
+        condition: service_healthy
     environment:
       DATABASE_URL: postgres://edgebase:edgebase@postgres:5432/edgebase
       MQTT_BROKER: mqtt://mqtt:1883
+      TIMESERIES_ENABLED: "true"
+      TIMESERIES_DB_URL: "http://influxdb:8086"
+      TIMESERIES_DB_TOKEN: "my-super-secret-auth-token"
+      TIMESERIES_DB_ORG: "edgebase"
+      TIMESERIES_DB_BUCKET: "metrics"
+      TIMESERIES_BATCH_SIZE: 10
+      TIMESERIES_BATCH_TIMEOUT: 5
+      TIMESERIES_RETENTION_DAYS: 30
     ports:
       - "8000:8000"
 
 volumes:
   postgres_data:
   mqtt_data:
+  influxdb_data:

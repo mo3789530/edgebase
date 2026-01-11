@@ -3,9 +3,12 @@ package handler
 import (
 	"net/http"
 
+	"time"
+
 	"github.com/edgebase/platform/control-plane/internal/errors"
 	"github.com/edgebase/platform/control-plane/internal/logger"
 	"github.com/edgebase/platform/control-plane/internal/service"
+	"github.com/edgebase/platform/control-plane/internal/timeseries"
 	"github.com/edgebase/platform/control-plane/internal/validator"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -61,14 +64,26 @@ func (h *Handler) RegisterNode(c *fiber.Ctx) error {
 	})
 }
 
-func (h *Handler) Heartbeat(c *fiber.Ctx) error {
+func (h *Handler) Heartbeat(c *fiber.Ctx) (err error) {
 	requestID := logger.GetRequestID(c)
+	start := time.Now()
+
+	defer func() {
+		if h.metricCollector != nil {
+			status := timeseries.StatusSuccess
+			if err != nil {
+				status = timeseries.StatusFailure
+			}
+			_ = h.metricCollector.RecordExecutionEnd(c.Context(), "api_heartbeat", requestID, time.Since(start), status, err)
+		}
+	}()
+
 	id, err := h.parseUUID(c, "id")
 	if err != nil {
 		return errors.BadRequest(c, "invalid node id", nil)
 	}
 
-	if err := h.nodeSvc.Heartbeat(c.Context(), id); err != nil {
+	if err = h.nodeSvc.Heartbeat(c.Context(), id); err != nil {
 		logger.Error(requestID, "heartbeat_failed", err)
 		return errors.InternalError(c, "heartbeat failed")
 	}

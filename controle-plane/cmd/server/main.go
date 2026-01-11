@@ -24,6 +24,8 @@ import (
 	"github.com/edgebase/platform/control-plane/internal/service"
 	"github.com/edgebase/platform/control-plane/internal/shutdown"
 	"github.com/edgebase/platform/control-plane/internal/storage"
+	"github.com/edgebase/platform/control-plane/internal/timeseries"
+	"github.com/edgebase/platform/control-plane/internal/timeseries/influxdb"
 )
 
 func main() {
@@ -104,6 +106,52 @@ func main() {
 	telemetrySvc := service.NewTelemetryService(telemetryRepo)
 	_ = service.NewAuditService(dbConn)
 
+	// Initialize Time-Series System
+	var (
+		metricCollector timeseries.MetricCollector
+		logWriter       timeseries.LogWriter
+		tsShutdownMgr   *timeseries.ShutdownManager
+	)
+
+	if cfg.TimeSeriesEnabled {
+		log.Println("Initializing time-series system...")
+
+		// Client
+		influxClient, err := influxdb.NewClient(influxdb.Config{
+			URL:    cfg.TimeSeriesDBURL,
+			Token:  cfg.TimeSeriesDBToken,
+			Org:    cfg.TimeSeriesDBOrg,
+			Bucket: cfg.TimeSeriesDBBucket,
+		})
+		if err != nil {
+			log.Printf("Warning: Failed to connect to time-series DB: %v", err)
+		} else {
+			// Store
+			tsStore := influxdb.NewStore(influxClient)
+
+			// Retention
+			retentionMgr := timeseries.NewRetentionManager(tsStore, cfg.TimeSeriesRetentionDays)
+			if err := retentionMgr.ApplyPolicy(context.Background()); err != nil {
+				log.Printf("Warning: Failed to apply retention policy: %v", err)
+			}
+
+			// Batch Manager
+			batchMgr := timeseries.NewBatchManager(tsStore, cfg.TimeSeriesBatchSize, time.Duration(cfg.TimeSeriesBatchTimeout)*time.Second)
+
+			// Buffered Store (Adapter)
+			bufferedStore := timeseries.NewBufferedStore(tsStore, batchMgr)
+
+			// Collector & Writer
+			metricCollector = timeseries.NewCollector(bufferedStore)
+			logWriter = timeseries.NewWriter(bufferedStore)
+
+			// Shutdown Manager
+			tsShutdownMgr = timeseries.NewShutdownManager(tsStore, batchMgr)
+
+			log.Println("Time-series system initialized")
+		}
+	}
+
 	// Initialize cache (5 minute TTL)
 	_ = cache.New(5 * time.Minute)
 
@@ -136,11 +184,14 @@ func main() {
 	app.Get("/metrics", healthHandler.Metrics)
 
 	// Register API routes
-	h := handler.NewHandler(nodeSvc, syncSvc, artifactSvc, schemaSvc, telemetrySvc, authMgr, time.Duration(cfg.TokenExpiryHours)*time.Hour)
+	h := handler.NewHandler(nodeSvc, syncSvc, artifactSvc, schemaSvc, telemetrySvc, authMgr, time.Duration(cfg.TokenExpiryHours)*time.Hour, metricCollector, logWriter)
 	h.RegisterRoutes(app)
 
 	// Setup graceful shutdown
 	shutdownMgr := shutdown.NewManager(app, dbConn)
+	if tsShutdownMgr != nil {
+		shutdownMgr.AddHook(tsShutdownMgr.Shutdown)
+	}
 	shutdownMgr.Start()
 
 	// Start server

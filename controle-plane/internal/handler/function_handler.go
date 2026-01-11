@@ -3,14 +3,30 @@ package handler
 import (
 	"net/http"
 
+	"time"
+
 	"github.com/edgebase/platform/control-plane/internal/errors"
 	"github.com/edgebase/platform/control-plane/internal/logger"
+	"github.com/edgebase/platform/control-plane/internal/timeseries"
 	"github.com/edgebase/platform/control-plane/internal/validator"
 	"github.com/gofiber/fiber/v2"
 )
 
-func (h *Handler) CreateFunction(c *fiber.Ctx) error {
+func (h *Handler) CreateFunction(c *fiber.Ctx) (err error) {
 	requestID := logger.GetRequestID(c)
+	start := time.Now()
+
+	defer func() {
+		if h.metricCollector != nil {
+			status := timeseries.StatusSuccess
+			if err != nil {
+				status = timeseries.StatusFailure
+			}
+			// Use generic ID for API metrics
+			_ = h.metricCollector.RecordExecutionEnd(c.Context(), "api_create_function", requestID, time.Since(start), status, err)
+		}
+	}()
+
 	var req struct {
 		Name           string `json:"name"`
 		Entrypoint     string `json:"entrypoint"`
@@ -18,7 +34,7 @@ func (h *Handler) CreateFunction(c *fiber.Ctx) error {
 		MemoryPages    int32  `json:"memory_pages"`
 		MaxExecutionMs int32  `json:"max_execution_ms"`
 	}
-	if err := c.BodyParser(&req); err != nil {
+	if err = c.BodyParser(&req); err != nil {
 		logger.Warn(requestID, "invalid_request_body", err, nil)
 		return errors.BadRequest(c, "invalid request body", nil)
 	}
@@ -34,7 +50,9 @@ func (h *Handler) CreateFunction(c *fiber.Ctx) error {
 		for k, v := range v.ErrorMap() {
 			errs[k] = v
 		}
-		return errors.BadRequest(c, "validation failed", errs)
+		// Capture error from helper
+		err = errors.BadRequest(c, "validation failed", errs)
+		return err
 	}
 
 	fn, err := h.artifactSvc.CreateFunction(c.Context(), req.Name, req.Entrypoint, req.Runtime, req.MemoryPages, req.MaxExecutionMs)
@@ -158,8 +176,20 @@ func (h *Handler) DownloadArtifact(c *fiber.Ctx) error {
 	return c.Send(data)
 }
 
-func (h *Handler) DeployFunction(c *fiber.Ctx) error {
+func (h *Handler) DeployFunction(c *fiber.Ctx) (err error) {
 	requestID := logger.GetRequestID(c)
+	start := time.Now()
+
+	defer func() {
+		if h.metricCollector != nil {
+			status := timeseries.StatusSuccess
+			if err != nil {
+				status = timeseries.StatusFailure
+			}
+			_ = h.metricCollector.RecordExecutionEnd(c.Context(), "api_deploy_function", requestID, time.Since(start), status, err)
+		}
+	}()
+
 	functionID, err := h.parseUUID(c, "function_id")
 	if err != nil {
 		return errors.BadRequest(c, "invalid function id", nil)
@@ -170,7 +200,7 @@ func (h *Handler) DeployFunction(c *fiber.Ctx) error {
 		return errors.BadRequest(c, "invalid node id", nil)
 	}
 
-	if err := h.syncSvc.QueueDeployment(c.Context(), nodeID, functionID); err != nil {
+	if err = h.syncSvc.QueueDeployment(c.Context(), nodeID, functionID); err != nil {
 		logger.Error(requestID, "queue_deployment_failed", err)
 		return errors.InternalError(c, "failed to queue deployment")
 	}

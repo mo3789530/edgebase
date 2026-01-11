@@ -6,18 +6,21 @@ import (
 
 	"github.com/edgebase/platform/control-plane/internal/auth"
 	"github.com/edgebase/platform/control-plane/internal/service"
+	"github.com/edgebase/platform/control-plane/internal/timeseries"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 )
 
 type Handler struct {
-	nodeSvc       service.NodeService
-	syncSvc       service.SyncService
-	artifactSvc   service.ArtifactService
-	schemaSvc     service.SchemaService
-	telemetrySvc  service.TelemetryService
-	authMgr       *auth.Manager
-	tokenExpiry   time.Duration
+	nodeSvc         service.NodeService
+	syncSvc         service.SyncService
+	artifactSvc     service.ArtifactService
+	schemaSvc       service.SchemaService
+	telemetrySvc    service.TelemetryService
+	authMgr         *auth.Manager
+	tokenExpiry     time.Duration
+	metricCollector timeseries.MetricCollector
+	logWriter       timeseries.LogWriter
 }
 
 func NewHandler(
@@ -28,15 +31,19 @@ func NewHandler(
 	telemetrySvc service.TelemetryService,
 	authMgr *auth.Manager,
 	tokenExpiry time.Duration,
+	metricCollector timeseries.MetricCollector,
+	logWriter timeseries.LogWriter,
 ) *Handler {
 	return &Handler{
-		nodeSvc:       nodeSvc,
-		syncSvc:       syncSvc,
-		artifactSvc:   artifactSvc,
-		schemaSvc:     schemaSvc,
-		telemetrySvc:  telemetrySvc,
-		authMgr:       authMgr,
-		tokenExpiry:   tokenExpiry,
+		nodeSvc:         nodeSvc,
+		syncSvc:         syncSvc,
+		artifactSvc:     artifactSvc,
+		schemaSvc:       schemaSvc,
+		telemetrySvc:    telemetrySvc,
+		authMgr:         authMgr,
+		tokenExpiry:     tokenExpiry,
+		metricCollector: metricCollector,
+		logWriter:       logWriter,
 	}
 }
 

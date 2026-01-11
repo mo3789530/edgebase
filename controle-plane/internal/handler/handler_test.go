@@ -152,7 +152,7 @@ func TestRegisterNode(t *testing.T) {
 	mockTelemetrySvc := new(MockTelemetryService)
 
 	authMgr := auth.NewManager("test-secret")
-	h := NewHandler(mockNodeSvc, mockSyncSvc, mockArtifactSvc, mockSchemaSvc, mockTelemetrySvc, authMgr, time.Hour)
+	h := NewHandler(mockNodeSvc, mockSyncSvc, mockArtifactSvc, mockSchemaSvc, mockTelemetrySvc, authMgr, time.Hour, nil, nil)
 	app := fiber.New()
 	h.RegisterRoutes(app)
 
