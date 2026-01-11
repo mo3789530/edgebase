@@ -28,6 +28,16 @@ type Config struct {
 	DBConnMaxLifetime int
 	JWTSecret         string
 	TokenExpiryHours  int
+
+	// TimeSeries Config
+	TimeSeriesEnabled       bool
+	TimeSeriesDBURL         string
+	TimeSeriesDBToken       string
+	TimeSeriesDBOrg         string
+	TimeSeriesDBBucket      string
+	TimeSeriesBatchSize     int
+	TimeSeriesBatchTimeout  int // seconds
+	TimeSeriesRetentionDays int
 }
 
 func Load() (*Config, error) {
@@ -40,7 +50,7 @@ func Load() (*Config, error) {
 		MinIOAccessKey:    getEnv("MINIO_ACCESS_KEY", "admin"),
 		MinIOSecretKey:    getEnv("MINIO_SECRET_KEY", "password"),
 		MinIOBucket:       getEnv("MINIO_BUCKET", "wasm-functions"),
-		
+
 		S3Enabled:   getEnvAsBool("S3_ENABLED", false),
 		S3Region:    getEnv("AWS_REGION", "us-east-1"),
 		S3AccessKey: getEnv("AWS_ACCESS_KEY_ID", ""),
@@ -54,6 +64,15 @@ func Load() (*Config, error) {
 		DBConnMaxLifetime: getEnvAsInt("DB_CONN_MAX_LIFETIME", 300), // seconds
 		JWTSecret:         getEnv("JWT_SECRET", "your-secret-key-change-in-production"),
 		TokenExpiryHours:  getEnvAsInt("TOKEN_EXPIRY_HOURS", 24),
+
+		TimeSeriesEnabled:       getEnvAsBool("TIMESERIES_ENABLED", false),
+		TimeSeriesDBURL:         getEnv("TIMESERIES_DB_URL", "http://localhost:8086"),
+		TimeSeriesDBToken:       getEnv("TIMESERIES_DB_TOKEN", ""),
+		TimeSeriesDBOrg:         getEnv("TIMESERIES_DB_ORG", ""),
+		TimeSeriesDBBucket:      getEnv("TIMESERIES_DB_BUCKET", "metrics"),
+		TimeSeriesBatchSize:     getEnvAsInt("TIMESERIES_BATCH_SIZE", 100),
+		TimeSeriesBatchTimeout:  getEnvAsInt("TIMESERIES_BATCH_TIMEOUT", 5),
+		TimeSeriesRetentionDays: getEnvAsInt("TIMESERIES_RETENTION_DAYS", 30),
 	}, nil
 }
 

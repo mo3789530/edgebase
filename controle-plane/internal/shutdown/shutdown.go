@@ -13,15 +13,22 @@ import (
 )
 
 type Manager struct {
-	app *fiber.App
-	db  *gorm.DB
+	app   *fiber.App
+	db    *gorm.DB
+	hooks []func(context.Context) error
 }
 
 func NewManager(app *fiber.App, db *gorm.DB) *Manager {
 	return &Manager{
-		app: app,
-		db:  db,
+		app:   app,
+		db:    db,
+		hooks: make([]func(context.Context) error, 0),
 	}
+}
+
+// AddHook adds a cleanup hook
+func (m *Manager) AddHook(hook func(context.Context) error) {
+	m.hooks = append(m.hooks, hook)
 }
 
 // Start listens for shutdown signals and gracefully shuts down
@@ -38,9 +45,19 @@ func (m *Manager) Start() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
+		// Run hooks first (e.g. flush metrics before closing DB/App?)
+		// Usually app shutdown first (stop accepting requests), then hooks, then DB.
+		
 		// Shutdown Fiber app
 		if err := m.app.ShutdownWithContext(ctx); err != nil {
 			logger.Error("", "fiber_shutdown_error", err)
+		}
+		
+		// Run hooks
+		for _, hook := range m.hooks {
+			if err := hook(ctx); err != nil {
+				logger.Error("", "shutdown_hook_error", err)
+			}
 		}
 
 		// Close database connection
