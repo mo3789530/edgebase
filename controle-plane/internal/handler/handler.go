@@ -56,6 +56,7 @@ func (h *Handler) RegisterRoutes(app *fiber.App) {
 	nodes.Post("/:id/heartbeat", auth.AuthMiddleware(h.authMgr), h.Heartbeat)
 	nodes.Get("/:id/sync", auth.AuthMiddleware(h.authMgr), h.GetSyncInfo)
 	nodes.Post("/:id/sync/ack", auth.AuthMiddleware(h.authMgr), h.AckSync)
+	nodes.Post("/:id/schema_status", auth.AuthMiddleware(h.authMgr), h.UpdateSchemaStatus)
 
 	// Auth endpoints
 	authGroup := api.Group("/auth")
@@ -86,6 +87,7 @@ func (h *Handler) RegisterRoutes(app *fiber.App) {
 	schemas := api.Group("/schemas", auth.AuthMiddleware(h.authMgr))
 	schemas.Post("/", h.RegisterSchema)
 	schemas.Get("/", h.ListSchemas)
+	schemas.Get("/:version/download", h.DownloadSchema)
 
 	// Telemetry endpoints (require auth)
 	sync := api.Group("/sync", auth.AuthMiddleware(h.authMgr))

@@ -54,8 +54,27 @@ impl Database {
                 status TEXT NOT NULL,
                 error_message TEXT
             );
+            
+            CREATE TABLE IF NOT EXISTS _schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at INTEGER DEFAULT (strftime('%s', 'now'))
+            );
             "#,
         )?;
+        Ok(())
+    }
+
+    pub fn get_current_version(&self) -> Result<i32> {
+        let mut stmt = self.conn.prepare("SELECT MAX(version) FROM _schema_migrations")?;
+        let version: Option<i32> = stmt.query_row([], |row| row.get(0))?;
+        Ok(version.unwrap_or(0))
+    }
+
+    pub fn apply_migration(&self, version: i32, sql: &str) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute_batch(sql)?;
+        tx.execute("INSERT INTO _schema_migrations (version) VALUES (?1)", params![version])?;
+        tx.commit()?;
         Ok(())
     }
 
