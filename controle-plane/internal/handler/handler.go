@@ -17,6 +17,7 @@ type Handler struct {
 	artifactSvc     service.ArtifactService
 	schemaSvc       service.SchemaService
 	telemetrySvc    service.TelemetryService
+	vmSvc           service.VMService
 	authMgr         *auth.Manager
 	tokenExpiry     time.Duration
 	metricCollector timeseries.MetricCollector
@@ -29,6 +30,7 @@ func NewHandler(
 	artifactSvc service.ArtifactService,
 	schemaSvc service.SchemaService,
 	telemetrySvc service.TelemetryService,
+	vmSvc service.VMService,
 	authMgr *auth.Manager,
 	tokenExpiry time.Duration,
 	metricCollector timeseries.MetricCollector,
@@ -40,6 +42,7 @@ func NewHandler(
 		artifactSvc:     artifactSvc,
 		schemaSvc:       schemaSvc,
 		telemetrySvc:    telemetrySvc,
+		vmSvc:           vmSvc,
 		authMgr:         authMgr,
 		tokenExpiry:     tokenExpiry,
 		metricCollector: metricCollector,
@@ -99,6 +102,14 @@ func (h *Handler) RegisterRoutes(app *fiber.App) {
 	// Device endpoints (require auth)
 	devices := api.Group("/devices", auth.AuthMiddleware(h.authMgr))
 	devices.Post("/register", h.RegisterDevice)
+
+	// VM endpoints (require auth)
+	nodes.Post("/:node_id/vms", auth.AuthMiddleware(h.authMgr), h.CreateVM)
+	nodes.Get("/:node_id/vms", auth.AuthMiddleware(h.authMgr), h.ListVMs)
+	nodes.Get("/:node_id/vms/:vm_id", auth.AuthMiddleware(h.authMgr), h.GetVM)
+	nodes.Post("/:node_id/vms/:vm_id/start", auth.AuthMiddleware(h.authMgr), h.StartVM)
+	nodes.Post("/:node_id/vms/:vm_id/stop", auth.AuthMiddleware(h.authMgr), h.StopVM)
+	nodes.Delete("/:node_id/vms/:vm_id", auth.AuthMiddleware(h.authMgr), h.DeleteVM)
 
 	// Documentation endpoints
 	app.Get("/docs", h.DocsHTML)

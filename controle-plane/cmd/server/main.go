@@ -62,6 +62,8 @@ func main() {
 		&model.SyncStatus{},
 		&model.NodeSchemaStatus{},
 		&model.AuditLog{},
+		&model.VM{},
+		&model.VMTemplate{},
 	); err != nil {
 		log.Fatalf("failed to migrate DB: %v", err)
 	}
@@ -98,6 +100,7 @@ func main() {
 	schemaRepo := repository.NewSchemaRepository(dbConn)
 	syncRepo := repository.NewSyncRepository(dbConn)
 	telemetryRepo := repository.NewTelemetryRepository(dbConn)
+	vmRepo := repository.NewVMRepository(dbConn)
 
 	// Initialize Services
 	nodeSvc := service.NewNodeService(nodeRepo)
@@ -105,6 +108,7 @@ func main() {
 	schemaSvc := service.NewSchemaService(schemaRepo, mqttClient)
 	syncSvc := service.NewSyncService(syncRepo, nodeRepo, funcRepo, schemaRepo, artifactSvc)
 	telemetrySvc := service.NewTelemetryService(telemetryRepo)
+	vmSvc := service.NewVMService(vmRepo, mqttClient)
 	_ = service.NewAuditService(dbConn)
 
 	// Initialize Time-Series System
@@ -185,7 +189,7 @@ func main() {
 	app.Get("/metrics", healthHandler.Metrics)
 
 	// Register API routes
-	h := handler.NewHandler(nodeSvc, syncSvc, artifactSvc, schemaSvc, telemetrySvc, authMgr, time.Duration(cfg.TokenExpiryHours)*time.Hour, metricCollector, logWriter)
+	h := handler.NewHandler(nodeSvc, syncSvc, artifactSvc, schemaSvc, telemetrySvc, vmSvc, authMgr, time.Duration(cfg.TokenExpiryHours)*time.Hour, metricCollector, logWriter)
 	h.RegisterRoutes(app)
 
 	// Setup graceful shutdown
