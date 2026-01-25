@@ -47,6 +47,7 @@ type SchemaMigration struct {
 	Description string    `json:"description"`
 	UpSQL       string    `gorm:"not null" json:"up_sql"`
 	DownSQL     string    `json:"down_sql"`
+	Checksum    string    `json:"checksum"`
 	CreatedAt   time.Time `gorm:"not null;default:now()" json:"created_at"`
 }
 
@@ -113,3 +114,13 @@ type SyncStatus struct {
 	PendingRecordsCount  int        `gorm:"default:0" json:"pending_records_count"`
 	TotalSyncedRecords   int64      `gorm:"default:0" json:"total_synced_records"`
 }
+
+type NodeSchemaStatus struct {
+	ID             uuid.UUID `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
+	NodeID         uuid.UUID `gorm:"type:uuid;not null" json:"node_id"`
+	CurrentVersion int       `json:"current_version"`
+	LastUpdated    time.Time `gorm:"not null;default:now()" json:"last_updated"`
+	Status         string    `json:"status"` // "synced", "failed"
+	ErrorMessage   string    `json:"error_message"`
+}
+

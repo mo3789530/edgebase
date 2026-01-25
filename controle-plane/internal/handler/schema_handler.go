@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/edgebase/platform/control-plane/internal/errors"
 	"github.com/edgebase/platform/control-plane/internal/logger"
@@ -74,3 +75,55 @@ func (h *Handler) ListSchemas(c *fiber.Ctx) error {
 
 	return c.JSON(pagination.NewResponse(paginatedSchemas, total, params))
 }
+
+func (h *Handler) DownloadSchema(c *fiber.Ctx) error {
+	requestID := logger.GetRequestID(c)
+	versionStr := c.Params("version")
+	// Use strconv.Atoi
+	version, err := strconv.Atoi(versionStr)
+	if err != nil {
+		logger.Warn(requestID, "invalid_version_param", err, nil)
+		return errors.BadRequest(c, "invalid version parameter", nil)
+	}
+
+	schema, err := h.schemaSvc.GetSchema(c.Context(), version)
+	if err != nil {
+		logger.Error(requestID, "get_schema_failed", err)
+		return errors.InternalError(c, "failed to get schema")
+	}
+	if schema == nil {
+		return errors.NotFound(c, "schema not found")
+	}
+
+	// Return raw SQL
+	c.Set("Content-Type", "text/plain")
+	return c.SendString(schema.UpSQL)
+}
+
+type UpdateSchemaStatusRequest struct {
+	Version      int    `json:"version"`
+	Status       string `json:"status"`
+	ErrorMessage string `json:"error_message"`
+}
+
+func (h *Handler) UpdateSchemaStatus(c *fiber.Ctx) error {
+	requestID := logger.GetRequestID(c)
+	nodeID, err := h.parseUUID(c, "id")
+	if err != nil {
+		return err
+	}
+
+	var req UpdateSchemaStatusRequest
+	if err := c.BodyParser(&req); err != nil {
+		logger.Warn(requestID, "invalid_request_body", err, nil)
+		return errors.BadRequest(c, "invalid request body", nil)
+	}
+
+	if err := h.schemaSvc.UpdateNodeStatus(c.Context(), nodeID, req.Version, req.Status, req.ErrorMessage); err != nil {
+		logger.Error(requestID, "update_schema_status_failed", err)
+		return errors.InternalError(c, "failed to update schema status")
+	}
+
+	return c.Status(http.StatusOK).JSON(fiber.Map{"message": "status updated"})
+}
+

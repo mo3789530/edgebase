@@ -60,6 +60,7 @@ func main() {
 		&model.TelemetryData{},
 		&model.Command{},
 		&model.SyncStatus{},
+		&model.NodeSchemaStatus{},
 		&model.AuditLog{},
 	); err != nil {
 		log.Fatalf("failed to migrate DB: %v", err)
@@ -101,7 +102,7 @@ func main() {
 	// Initialize Services
 	nodeSvc := service.NewNodeService(nodeRepo)
 	artifactSvc := service.NewArtifactService(funcRepo, storageClient)
-	schemaSvc := service.NewSchemaService(schemaRepo)
+	schemaSvc := service.NewSchemaService(schemaRepo, mqttClient)
 	syncSvc := service.NewSyncService(syncRepo, nodeRepo, funcRepo, schemaRepo, artifactSvc)
 	telemetrySvc := service.NewTelemetryService(telemetryRepo)
 	_ = service.NewAuditService(dbConn)

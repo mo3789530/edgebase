@@ -1,7 +1,8 @@
 use crate::db::Database;
 use crate::models::{Command, SyncResult, TelemetryData};
+use crate::migration::MigrationManager;
 use anyhow::Result;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
 pub struct SyncAgent {
@@ -11,6 +12,7 @@ pub struct SyncAgent {
     client: reqwest::Client,
     batch_size: usize,
     poll_interval: Duration,
+    migration_manager: MigrationManager,
 }
 
 impl SyncAgent {
@@ -20,6 +22,8 @@ impl SyncAgent {
             .build()
             .expect("Failed to create HTTP client");
 
+        let migration_manager = MigrationManager::new(api_url.clone(), device_id.clone());
+
         Self {
             db,
             api_url,
@@ -27,6 +31,7 @@ impl SyncAgent {
             client,
             batch_size: 1000,
             poll_interval: Duration::from_secs(30),
+            migration_manager,
         }
     }
 
@@ -171,7 +176,22 @@ impl SyncAgent {
     pub async fn run(&self) -> Result<()> {
         info!("Starting sync agent for device {}", self.device_id);
         
+        let mut last_schema_check = Instant::now();
+        // Check immediately on start is done in main, but we can also set this to run soon or just rely on main.
+        // Let's set it to check after interval.
+        let schema_check_interval = Duration::from_secs(3600); // 1 hour
+
         loop {
+            // Check for schema updates
+            if last_schema_check.elapsed() >= schema_check_interval {
+                 info!("Checking for schema updates...");
+                 match self.migration_manager.check_and_apply(&self.db).await {
+                     Ok(_) => info!("Schema check completed"),
+                     Err(e) => error!("Schema check failed: {}", e),
+                 }
+                 last_schema_check = Instant::now();
+            }
+
             // Upstream sync
             match self.sync_to_control_plane().await {
                 Ok(result) => {
