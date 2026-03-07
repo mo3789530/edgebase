@@ -8,17 +8,19 @@ import (
 	"github.com/edgebase/platform/control-plane/internal/pagination"
 	"github.com/edgebase/platform/control-plane/internal/validator"
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 )
 
 func (h *Handler) CreateRoute(c *fiber.Ctx) error {
 	requestID := logger.GetRequestID(c)
 	var req struct {
-		Host        string   `json:"host"`
-		Path        string   `json:"path"`
-		FunctionID  string   `json:"function_id"`
-		Methods     []string `json:"methods"`
-		Priority    int32    `json:"priority"`
-		PopSelector *string  `json:"pop_selector"`
+		Host                 string   `json:"host"`
+		Path                 string   `json:"path"`
+		FunctionDefinitionID string   `json:"function_definition_id"`
+		Methods              []string `json:"methods"`
+		TimeoutMs            int32    `json:"timeout_ms"`
+		RetryPolicy          string   `json:"retry_policy"`
+		ClusterSelector      string   `json:"cluster_selector"`
 	}
 	if err := c.BodyParser(&req); err != nil {
 		logger.Warn(requestID, "invalid_request_body", err, nil)
@@ -28,7 +30,7 @@ func (h *Handler) CreateRoute(c *fiber.Ctx) error {
 	v := validator.New()
 	v.Required("host", req.Host).MinLength("host", req.Host, 1)
 	v.Required("path", req.Path).MinLength("path", req.Path, 1)
-	v.Required("function_id", req.FunctionID).MinLength("function_id", req.FunctionID, 1)
+	v.Required("function_definition_id", req.FunctionDefinitionID).MinLength("function_definition_id", req.FunctionDefinitionID, 1)
 	if !v.IsValid() {
 		logger.Warn(requestID, "validation_failed", nil, v.ErrorMap())
 		errs := make(map[string]interface{})
@@ -38,7 +40,20 @@ func (h *Handler) CreateRoute(c *fiber.Ctx) error {
 		return errors.BadRequest(c, "validation failed", errs)
 	}
 
-	route, err := h.syncSvc.CreateRoute(c.Context(), req.Host, req.Path, req.FunctionID, req.Methods, req.Priority, req.PopSelector)
+	functionDefinitionID, err := uuid.Parse(req.FunctionDefinitionID)
+	if err != nil {
+		return errors.BadRequest(c, "invalid function_definition_id", nil)
+	}
+
+	route, err := h.routeSvc.CreateRoute(c.Context(), service.CreateRouteInput{
+		Host:                 req.Host,
+		Path:                 req.Path,
+		FunctionDefinitionID: functionDefinitionID,
+		Methods:              req.Methods,
+		TimeoutMs:            req.TimeoutMs,
+		RetryPolicy:          req.RetryPolicy,
+		ClusterSelector:      req.ClusterSelector,
+	})
 	if err != nil {
 		logger.Error(requestID, "create_route_failed", err)
 		return errors.InternalError(c, "failed to create route")
@@ -56,13 +71,16 @@ func (h *Handler) ListRoutes(c *fiber.Ctx) error {
 	requestID := logger.GetRequestID(c)
 	params := pagination.ParseParams(c)
 
-	routesInterface, err := h.syncSvc.ListRoutes(c.Context())
+	routesList, err := h.routeSvc.ListRoutes(c.Context())
 	if err != nil {
 		logger.Error(requestID, "list_routes_failed", err)
 		return errors.InternalError(c, "failed to list routes")
 	}
 
-	routes := routesInterface.([]interface{})
+	routes := make([]interface{}, 0, len(routesList))
+	for _, route := range routesList {
+		routes = append(routes, route)
+	}
 	total := int64(len(routes))
 	start := params.Offset
 	end := params.Offset + params.Limit

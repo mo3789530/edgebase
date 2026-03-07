@@ -8,17 +8,25 @@ EdgeBase上で、AWS Lambdaに近い操作感を持つコンテナベースのFu
 
 - Functionを登録できる
 - Functionをコンテナとして配布できる
-- HTTP/EventでFunctionを起動できる
+- HTTPでFunctionを起動できる
 - k3s上でFunctionを安全に実行できる
 - 実行ログ、メトリクス、実行履歴を追跡できる
+- revision管理、traffic split、scale-to-zeroを実現できる
+
+## 方針変更
+
+当初は `Deployment + Service + 独自Gateway` を中心にした自前FaaSを想定していたが、Lambda-likeな実行感に近づけるには、Knative ServingをExecution Planeに採用する方が適切である。
+
+この文書では、自前Gateway中心の構成ではなく、Knative Serviceを中心にした構成へ切り替える。
 
 ## 位置づけ
 
 既存構成との関係:
 
-- `controle-plane`: Function管理、配布管理、ルーティング、監視
-- `functions/edge-runner`: 将来的な実行ノード側コンポーネントの参考実装
+- `controle-plane`: Function定義、revision、target、route、監査
+- `cluster-agent`: Control Planeからsync planをpullし、k3sへ反映
 - k3s: 実行基盤
+- Knative Serving: Lambda-likeなコンテナ実行基盤
 
 本設計では、WASM中心の軽量実行ではなく、コンテナ実行型のFaaSを対象とする。
 
@@ -27,10 +35,11 @@ EdgeBase上で、AWS Lambdaに近い操作感を持つコンテナベースのFu
 ### 対象
 
 - コンテナイメージとしてFunctionを登録
-- k3sへのFunction配備
-- HTTP/Event起動
-- 実行制限
-- バージョン管理
+- Knative ServiceとしてFunctionを配備
+- HTTP起動
+- revision管理
+- traffic split
+- scale-to-zero
 - 実行履歴の保存
 
 ### 対象外
@@ -40,6 +49,7 @@ EdgeBase上で、AWS Lambdaに近い操作感を持つコンテナベースのFu
 - 複雑なマルチテナント課金
 - 完全なIAM互換
 - GPUジョブや長時間バッチ基盤
+- 初期フェーズでのEvent trigger
 
 ## 設計方針
 
@@ -47,12 +57,34 @@ EdgeBase上で、AWS Lambdaに近い操作感を持つコンテナベースのFu
 
 Control Planeは定義とDesired Stateを持ち、実行自体はk3s上のExecution Planeが担当する。
 
-- Control Plane: 管理、配布、ルーティング、監査
-- Execution Plane: 実行、スケーリング、結果返却
+- Control Plane: Function定義、Knative向けDesired State、Route管理、監査
+- Execution Plane: Knative Serving上での実行、autoscaling、結果返却
 
-### 2. Functionは短時間実行に限定する
+### 2. Execution PlaneはKnative Servingを使う
 
-Lambda風の使い勝手を維持するため、Functionは短時間・小粒度な処理を前提とする。
+Lambda-likeの核心である以下を自前実装せず、Knativeへ委譲する。
+
+- revision生成
+- traffic split
+- request-driven autoscaling
+- scale-to-zero / scale-from-zero
+- queue-proxy による concurrency 制御
+
+### 3. 配備はCluster Agent pull型に統一する
+
+Control PlaneがKubernetes APIを直接操作するのではなく、Function Controllerが `SyncPlan` を生成し、Cluster Agentがpullして適用する。
+
+ただし apply 対象は `Deployment` や `Service` ではなく、Knativeの `Service` を基本とする。
+
+### 4. 外部入口はKnative Ingressを活用する
+
+MVPでは独自Gatewayを作らず、Knativeのingress layerを利用する。
+
+- Control Planeは論理Routeを保持する
+- cluster側ではKnative ingressまたはKourier/Istio経由で受ける
+- 必要に応じて外部LBまたはIngress ControllerからKnativeに流す
+
+### 5. Functionは短時間・statelessを前提にする
 
 推奨特性:
 
@@ -61,41 +93,35 @@ Lambda風の使い勝手を維持するため、Functionは短時間・小粒度
 - idempotent
 - 外部ストレージ依存を明示
 
-### 3. k3sは実行基盤として扱う
-
-k3sはFunctionの管理主体ではなく、Container実行基盤として利用する。
-
-### 4. 初期フェーズではコンテナを常駐させる
-
-MVPでは完全なscale-to-zeroを目指さず、少数レプリカ常駐で安定動作を優先する。
-
 ## 全体アーキテクチャ
 
 ```text
 +-----------------------------+
 | EdgeBase Control Plane      |
-|  - Function Registry        |
-|  - Deployment Target Mgmt   |
-|  - Route / Trigger Mgmt     |
+|  - Function Definitions     |
+|  - Function Revisions       |
+|  - Deployment Targets       |
+|  - Route Definitions        |
 |  - Invocation Metadata      |
+|  - Function Controller      |
 +--------------+--------------+
                |
-               | desired state
+               | sync plan
                v
 +--------------+--------------+
 | Cluster Agent / Reconciler  |
-|  - Pull deployment plans    |
-|  - Apply to k3s             |
-|  - Report status            |
+|  - Pull sync plan           |
+|  - Apply Knative Service    |
+|  - Report ack / inventory   |
 +--------------+--------------+
                |
                v
 +--------------+--------------+
 | k3s Cluster                 |
-|  - Gateway                  |
-|  - Function Runtime Pods    |
-|  - Autoscaler               |
-|  - Service / Ingress        |
+|  - Knative Serving          |
+|  - Activator / Autoscaler   |
+|  - Queue Proxy              |
+|  - Ingress                  |
 +--------------+--------------+
                |
                v
@@ -103,92 +129,191 @@ MVPでは完全なscale-to-zeroを目指さず、少数レプリカ常駐で安�
 | Function Container          |
 |  - User handler             |
 |  - Runtime adapter          |
-|  - Request/response bridge  |
 +-----------------------------+
 ```
 
-## 主要コンポーネント
+## 期待する効果
 
-## 1. Function Registry
+Knative採用により、以下の自前実装を避けられる。
 
-Functionのメタデータを管理する。
+- 独自Gateway
+- 独自scale-to-zero
+- 独自request autoscaling
+- revision rolloutの制御
+- warm/coldの切替ロジック
+
+代わりに、Control Plane側は「Functionをどう見せるか」と「どのclusterへどのrevisionを出すか」に集中する。
+
+## 既存実装との整合
+
+本設計は以下の見直しを前提とする。
+
+- `controle-plane/internal/service/function_controller_service.go`
+  - 現在の `Deployment/Service` 向け plan 生成は、Knative Service向けへ変更する
+- `cluster-agent/internal/service/apply/k8s_applier.go`
+  - `Deployment/Service` apply中心から、Knative Service apply中心へ変更する
+- `cluster-agent/internal/service/gateway`
+  - 独自Gatewayは主経路から外し、不要なら削除する
+- `docs/function-controller-design.md`
+  - Sync planのresource typeをKnative前提へ更新する
+
+## ドメインモデル
+
+Function関連の責務は以下のモデルへ分離する。
+
+### 1. FunctionDefinition
+
+論理的なFunction名と公開設定を表す。
 
 保持項目:
 
 - `id`
 - `name`
-- `version`
-- `image`
-- `command`
-- `args`
-- `env`
-- `timeout_seconds`
-- `memory_mb`
-- `cpu_millis`
-- `max_concurrency`
-- `runtime_mode`
+- `description`
+- `runtime_kind`
+- `default_timeout_seconds`
+- `default_memory_mb`
+- `default_cpu_millis`
 - `created_at`
+- `updated_at`
 
-`runtime_mode` の例:
+### 2. FunctionRevision
 
-- `http`
-- `event`
-
-## 2. Deployment Manager
-
-どのFunctionをどのk3sクラスタへ配備するかを管理する。
-
-責務:
-
-- deployment target管理
-- rollout方針管理
-- version切替
-- 段階配備
-
-## 3. Gateway
-
-外部からのHTTP/Eventを受け、対象Functionへルーティングする。
-
-責務:
-
-- 認証
-- route解決
-- invocation id 発行
-- timeout管理
-- retry方針の適用
-
-MVPではHTTP triggerのみ対応でよい。
-
-## 4. Runtime Adapter
-
-Functionコンテナ内で共通の実行インターフェースを提供する。
-
-責務:
-
-- HTTP request を handler へ橋渡し
-- event payload の標準化
-- ヘルスチェック応答
-- 実行メタデータの返却
-
-Functionごとに自由なWebアプリを置くより、最低限の実行契約を持たせたほうが運用しやすい。
-
-## 5. Invocation Recorder
-
-各実行のメタデータを保存する。
+配布可能なイメージ単位の不変レコード。
 
 保持項目:
 
-- `invocation_id`
-- `function_id`
+- `id`
+- `function_definition_id`
+- `version`
+- `image`
+- `image_digest`
+- `command`
+- `args`
+- `env`
+- `port`
+- `healthcheck_path`
+- `created_at`
+
+### 3. FunctionDeploymentTarget
+
+どのclusterへ、どのrevisionを、どういうスケーリング条件で出すかを表す desired state。
+
+保持項目:
+
+- `id`
+- `function_definition_id`
 - `cluster_id`
+- `namespace`
+- `desired_revision_id`
+- `rollout_strategy`
+- `traffic_percent`
+- `min_scale`
+- `max_scale`
+- `container_concurrency`
+- `enabled`
 - `status`
+- `last_applied_revision_id`
+- `updated_at`
+
+### 4. Route
+
+外部入口からFunctionDefinitionへのマッピング。
+
+保持項目:
+
+- `id`
+- `host`
+- `path`
+- `methods`
+- `function_definition_id`
+- `cluster_selector`
+- `timeout_ms`
+- `retry_policy`
+- `enabled`
+
+### 5. Invocation / InvocationAttempt
+
+実行履歴は親子2段で保持する。
+
+`Invocation`:
+
+- `id`
+- `route_id`
+- `function_definition_id`
+- `trigger_type`
+- `request_id`
+- `started_at`
+- `completed_at`
+- `final_status`
+- `client_status_code`
+
+`InvocationAttempt`:
+
+- `id`
+- `invocation_id`
+- `cluster_id`
+- `knative_service`
+- `knative_revision`
+- `pod_name`
+- `attempt_no`
 - `started_at`
 - `completed_at`
 - `duration_ms`
+- `status`
 - `status_code`
+- `error_type`
 - `error_message`
-- `request_size`
-- `response_size`
+
+## 主要コンポーネント
+
+## 1. Function Registry
+
+FunctionDefinition と FunctionRevision を管理する。
+
+責務:
+
+- 論理Functionの作成
+- 新revisionの登録
+- revision immutabilityの維持
+- image digest固定
+
+## 2. Deployment Manager
+
+FunctionDeploymentTarget を管理する。
+
+責務:
+
+- clusterごとの配備対象管理
+- desired revision切替
+- scale設定管理
+- rollout方針管理
+
+## 3. Function Controller
+
+Control Plane上のdesired stateをcluster-agent向け `SyncPlan` へ変換する。
+
+責務:
+
+- target解決
+- inventoryとの差分判定
+- Knative Service manifest生成
+- rollout状態更新
+- drift判定
+
+Function ControllerはKubernetes APIを直接操作しない。
+
+## 4. Knative Serving
+
+実際のFunction実行を担当する。
+
+責務:
+
+- container起動
+- revision管理
+- traffic split
+- autoscaling
+- scale-to-zero
 
 ## 実行モデル
 
@@ -196,62 +321,78 @@ Functionごとに自由なWebアプリを置くより、最低限の実行契約
 
 ### フロー
 
-1. ClientがGatewayへリクエスト
-2. GatewayがRouteからFunctionを解決
-3. Gatewayが対象ClusterのFunction Serviceへ転送
-4. Function Podが処理
-5. 応答をGateway経由で返却
-6. Invocation metadata を記録
+1. Clientがcluster入口へリクエスト
+2. IngressがKnative Serviceへ転送
+3. Knativeがrevisionへルーティング
+4. Function containerが処理
+5. 応答を返却
+6. Invocation / InvocationAttempt を記録
 
 ### 特徴
 
-- 同期応答しやすい
-- API Gatewayに近い使い方ができる
+- cold startを許容しつつ scale-to-zero が可能
+- revision単位の切替ができる
+- 自前Gatewayを薄くできる
 
-## Event Trigger
+## Function ControllerとSyncPlan
 
-### フロー
+Cluster Agentに渡すplanは、Knative Service適用を前提にする。
 
-1. Event source がControl PlaneまたはBrokerへ送信
-2. Event dispatcher が対象Functionを決定
-3. QueueまたはHTTP経由でFunctionへ配送
-4. 非同期結果を記録
+### Action Type
 
-### 初期判断
+- `APPLY_KSERVICE`
+- `DELETE_KSERVICE`
+- `UPDATE_KSERVICE_TRAFFIC`
 
-MVPでは後回しにしてよい。
+### APPLY_KSERVICE payload例
 
-## Kubernetesリソース設計
+```json
+{
+  "namespace": "edge-functions",
+  "name": "telemetry-normalizer",
+  "image": "registry.local/telemetry-normalizer@sha256:abcd",
+  "port": 8080,
+  "timeout_seconds": 3,
+  "min_scale": 0,
+  "max_scale": 20,
+  "container_concurrency": 10,
+  "env": {
+    "MODE": "prod"
+  }
+}
+```
 
-各Function versionごとに以下を持つ。
+### UPDATE_KSERVICE_TRAFFIC payload例
 
-- `Deployment`
-- `Service`
-- `ConfigMap`
-- `Secret` 必要時のみ
-- `HorizontalPodAutoscaler` 任意
+```json
+{
+  "namespace": "edge-functions",
+  "name": "telemetry-normalizer",
+  "traffic": [
+    {
+      "revision": "telemetry-normalizer-v1",
+      "percent": 90
+    },
+    {
+      "revision": "telemetry-normalizer-v2",
+      "percent": 10
+    }
+  ]
+}
+```
 
-Function 1つに対して1 Deploymentを基本とする。
+## Kubernetes / Knativeリソース設計
 
-### Deployment設計
+Function実体はKnativeの `Service` を基本とする。
 
-推奨:
+必要に応じて以下を伴う。
 
-- replica 1 以上
-- readiness probe 必須
-- liveness probe 必須
-- resource requests / limits 設定
-- rolling update 利用
+- `Service.serving.knative.dev`
+- `Configuration`
+- `Revision`
+- `Route`
 
-### Service設計
-
-- ClusterIP を基本とする
-- GatewayからService名解決で呼ぶ
-
-### Ingress設計
-
-- 直接公開はしない
-- 外部公開はGateway経由に寄せる
+ただし後ろ3つは通常Knativeが内部的に管理するため、Control Planeの直接責務は `KService` の desired state に集中させる。
 
 ## Functionコンテナ契約
 
@@ -260,129 +401,54 @@ Functionコンテナは最低限以下を満たす。
 - 指定ポートでHTTP待受
 - `POST /invoke` を実装
 - `GET /health` を実装
-- JSON入力を受けられる
-- JSON出力を返せる
+- request envelope を受けられる
+- response envelope を返せる
 
-### リクエスト例
-
-```json
-{
-  "invocation_id": "uuid",
-  "function": {
-    "name": "telemetry-normalizer",
-    "version": "v1"
-  },
-  "request": {
-    "headers": {
-      "content-type": "application/json"
-    },
-    "body": {
-      "device_id": "dev-1",
-      "temperature": 31.2
-    }
-  },
-  "context": {
-    "cluster_id": "uuid",
-    "timeout_ms": 3000
-  }
-}
-```
-
-### レスポンス例
-
-```json
-{
-  "status_code": 200,
-  "headers": {
-    "content-type": "application/json"
-  },
-  "body": {
-    "normalized": true
-  }
-}
-```
-
-## データモデル
-
-既存 `controle-plane/internal/model` へ追加を想定する。
-
-## FunctionRuntime
-
-- `id`
-- `function_id`
-- `runtime_type`
-- `image`
-- `command`
-- `args`
-- `port`
-- `healthcheck_path`
-
-## FunctionDeploymentTarget
-
-- `id`
-- `function_id`
-- `cluster_id`
-- `namespace`
-- `desired_version`
-- `rollout_strategy`
-- `status`
-
-## InvocationRecord
-
-- `id`
-- `function_id`
-- `cluster_id`
-- `route_id`
-- `status`
-- `request_id`
-- `started_at`
-- `completed_at`
-- `duration_ms`
-- `error_message`
-
-## Route
-
-- `id`
-- `host`
-- `path`
-- `methods`
-- `function_id`
-- `cluster_selector`
-- `timeout_ms`
-- `retry_policy`
+KnativeはHTTPコンテナを前提とするため、container contractはHTTPベースとする。
 
 ## API設計
 
-## Function登録
+## FunctionDefinition作成
 
 `POST /functions`
 
 ```json
 {
   "name": "telemetry-normalizer",
-  "version": "v1",
-  "runtime": "container",
-  "image": "registry.local/telemetry-normalizer:v1",
-  "timeout_seconds": 3,
-  "memory_mb": 128,
-  "cpu_millis": 250,
-  "max_concurrency": 20
+  "runtime_kind": "container",
+  "default_timeout_seconds": 3,
+  "default_memory_mb": 128,
+  "default_cpu_millis": 250
 }
 ```
 
-## Function一覧
+## FunctionRevision登録
 
-`GET /functions`
-
-## Function配備
-
-`POST /functions/:id/deploy`
+`POST /functions/:id/revisions`
 
 ```json
 {
-  "cluster_ids": ["uuid-1", "uuid-2"],
+  "version": "v1",
+  "image": "registry.local/telemetry-normalizer:v1",
+  "image_digest": "sha256:abcd",
+  "port": 8080,
+  "healthcheck_path": "/health"
+}
+```
+
+## Deployment Target作成
+
+`POST /functions/:id/deployments`
+
+```json
+{
+  "cluster_ids": ["uuid-1"],
   "namespace": "edge-functions",
-  "rollout_strategy": "rolling"
+  "desired_revision_id": "uuid-revision-v1",
+  "min_scale": 0,
+  "max_scale": 20,
+  "container_concurrency": 10,
+  "rollout_strategy": "direct"
 }
 ```
 
@@ -395,40 +461,35 @@ Functionコンテナは最低限以下を満たす。
   "host": "api.edgebase.local",
   "path": "/normalize",
   "methods": ["POST"],
-  "function_id": "uuid",
+  "function_definition_id": "uuid",
   "timeout_ms": 3000
 }
 ```
-
-## Invocation実行
-
-`POST /invoke/:function_name`
-
-## Invocation詳細
-
-`GET /invocations/:id`
 
 ## スケーリング方針
 
 ### MVP
 
-- min replicas 1
-- HPAはCPUまたはRPS近似値で制御
-- scale-to-zeroは対象外
+- Knative autoscalingを使う
+- `minScale=0` を許可する
+- `maxScale` と `containerConcurrency` をFunction単位で制御する
 
 ### 将来拡張
 
-- queue length ベース
-- request latency ベース
-- scale-from-zero
+- cluster別default autoscaling profile
+- cold start軽減のための pre-warm
+- request class別の scaling policy
 
 ## セキュリティ
 
-- 外部公開はGatewayのみに限定する
-- Function Podの直接公開を避ける
+- 外部公開はKnative ingressに限定する
+- imageはdigest固定を基本とする
 - registry認証情報はSecretで管理する
-- tenant境界が必要な場合はnamespaceまたはclusterで分離する
 - 実行権限は最小権限のServiceAccountにする
+- `securityContext` を明示する
+- `runAsNonRoot` を有効化する
+- 不要なLinux capabilityをdropする
+- tenant境界が必要な場合はnamespaceまたはclusterで分離する
 
 ## ロギングと監視
 
@@ -437,20 +498,23 @@ Functionコンテナは最低限以下を満たす。
 - invocation count
 - error rate
 - p50/p95 latency
-- pod restart count
-- cluster別成功率
+- cold start率
+- scale up / scale down回数
+- revision別成功率
 
 ログ方針:
 
-- invocation_id を全ログに含める
-- Gateway と Function Pod の相関を取れるようにする
+- `invocation_id` を全ログに含める
+- `cluster_id`, `function_name`, `knative_service`, `knative_revision`, `pod_name` を含める
+- ingressログとrevisionログの相関を取れるようにする
 
 ## エラーハンドリング
 
 分類:
 
 - route resolution error
-- deployment unavailable
+- knative service unavailable
+- cold start timeout
 - function timeout
 - function error
 - cluster unreachable
@@ -459,98 +523,102 @@ Functionコンテナは最低限以下を満たす。
 
 - 4xx: 入力不正
 - 5xx: 実行基盤またはFunction内部エラー
-- timeout: 明示的に区別する
+- timeoutは `cold start timeout` と `function timeout` を区別する
 
 ## 実装フェーズ
 
 ### Phase 1: MVP
 
-- Function登録
-- Route作成
-- k3sへのDeployment生成
-- Gateway経由のHTTP起動
+- FunctionDefinition / FunctionRevision モデル追加
+- Deployment Target モデル追加
+- Knative前提のFunction Controller実装
+- Cluster AgentからKnative Service反映
+- HTTP triggerの疎通
 - Invocation記録
 
 ### Phase 2
 
-- HPA連携
-- version rollout
+- traffic split
 - canary配備
-- Cluster target配布管理
+- revision rollback
+- autoscaling tuning
 
 ### Phase 3
 
 - Event trigger
 - queue連携
 - retry / DLQ
-- scale-to-zero検討
+- マルチcluster routing最適化
 
 ## MVPの制約
 
 - HTTP triggerのみ
-- コンテナ常駐
-- 単純なrolling deploy
-- 同期レスポンス中心
+- Event triggerは後回し
+- Knative Serving導入が前提
+- Invocation保存は最低限から開始
 
 ## 既存リポジトリへの反映方針
 
 ### `controle-plane`
 
-追加候補:
+追加または更新候補:
 
-- `internal/model/function_runtime.go`
+- `internal/model/function_definition.go`
+- `internal/model/function_revision.go`
+- `internal/model/function_deployment_target.go`
+- `internal/model/route_definition.go`
 - `internal/model/invocation.go`
-- `internal/repository/function_runtime_repository.go`
-- `internal/repository/invocation_repository.go`
-- `internal/service/invocation_service.go`
-- `internal/handler/invocation_handler.go`
+- `internal/model/invocation_attempt.go`
+- `internal/service/function_controller_service.go`
+- `internal/service/route_service.go`
 
-### `functions`
+### `cluster-agent`
 
-追加候補:
+追加または更新候補:
 
-- `functions/container-runtime/`
-- 共通のruntime adapter
-- sample function container
+- Knative Service applyロジック
+- Knative inventory収集
+- route同期はKnative ingress前提へ簡素化
+
+### 廃止または縮小候補
+
+- 独自Gateway
+- Deployment/Service を直接applyするFaaS専用ロジック
 
 ## タスク
 
 ### Task 1
 
-- Function runtime用モデル追加
-- AutoMigrate組み込み
+- Knative前提で設計文書を更新
 
 ### Task 2
 
-- Function登録APIへcontainer runtime属性を追加
+- `Function Controller` 設計を Knative Service 中心に更新
 
 ### Task 3
 
-- Deployment target管理を追加
+- Cluster Agentへ Knative Service apply を追加
 
 ### Task 4
 
-- Gateway設計と最小実装
+- Route と Knative ingress の結合方針を確定
 
 ### Task 5
 
-- Invocation record の保存
+- Invocation / InvocationAttempt 保存
 
 ### Task 6
 
-- Cluster Agentからk3sへDeployment反映
-
-### Task 7
-
-- サンプルFunctionコンテナ作成
+- sample function containerでKnative上の疎通確認
 
 ## 結論
 
-Lambda風のシステムをEdgeBaseで実現するなら、Control PlaneでFunction定義と配備を管理し、k3sをExecution Planeとして使う形が最も現実的である。
+Lambda風のシステムをEdgeBaseで実現するなら、Execution PlaneはKnative Servingを使う方が現実的である。
 
 特に重要なのは以下の点である。
 
 - Control PlaneとExecution Planeを分離する
-- Functionは短時間・statelessに寄せる
-- 初期はHTTP triggerと常駐Podに限定する
-- 完全なLambda互換ではなく、Edge向けFaaSとして段階的に育てる
+- 配備はCluster Agent pull型に統一する
+- 実行基盤はKnative Serviceを中心にする
+- revision、traffic split、scale-to-zeroはKnativeに委譲する
+- Control PlaneはFunction定義、route、監査に集中する

@@ -2,7 +2,7 @@
 
 ## 目的
 
-Function Controllerは、Control Planeに保存されたFunction定義とDeployment Targetをもとに、各k3sクラスタへ適用可能な配備計画を生成し、その反映状態を追跡するサービスである。
+Function Controllerは、Control Planeに保存されたFunction定義とDeployment Targetをもとに、各k3sクラスタ上のKnative Servingへ適用可能な配備計画を生成し、その反映状態を追跡するサービスである。
 
 本資料では以下を定義する。
 
@@ -20,9 +20,9 @@ Lambda風のコンテナ実行基盤では、Function登録だけでは不十分
 
 以下の橋渡しが必要になる。
 
-- Control Plane上の定義
+- Control Plane上のFunction定義
 - Cluster Agentが理解できるsync plan
-- k3s上に実際に存在するDeployment/Service
+- k3s上のKnative Service
 
 この変換責務を担うのがFunction Controllerである。
 
@@ -31,7 +31,7 @@ Lambda風のコンテナ実行基盤では、Function登録だけでは不十分
 ```text
 Control Plane API
   |
-  | Function / Route / Target / Cluster
+  | Function / Revision / Target / Route / Cluster
   v
 Function Controller
   |
@@ -39,9 +39,9 @@ Function Controller
   v
 Cluster Agent
   |
-  | Apply
+  | Apply Knative Service
   v
-k3s Cluster
+k3s + Knative Serving
 ```
 
 Function ControllerはKubernetes APIを直接操作しない。
@@ -58,11 +58,11 @@ Function ControllerはKubernetes APIを直接操作しない。
 
 ## 非役割
 
-- Gatewayのリクエスト転送
 - Function実行そのもの
 - Build処理
 - Docker image作成
 - Kubernetes APIへの直接apply
+- Knative ingressそのものの運用
 
 ## 設計原則
 
@@ -81,9 +81,18 @@ Controllerはpushしない。
 
 同じ入力からは同じplanが生成されるべきである。
 
-### 4. Deployment planと実行結果を分離
+### 4. Planと実行結果を分離
 
 planは「指示」、ackは「結果」である。混ぜない。
+
+### 5. Lambda-likeな実行責務はKnativeへ委譲する
+
+ControllerはKnative Serviceのdesired stateを定義するが、以下はKnativeへ委譲する。
+
+- revision生成
+- traffic split実行
+- request-driven autoscaling
+- scale-to-zero
 
 ## Controllerの責務分解
 
@@ -95,14 +104,14 @@ Function Controllerは内部的に以下へ分割して考える。
 
 - clusterごとの配備対象Functionを解決する
 - enabled/disabled状態を解釈する
-- desired versionを確定する
+- desired revisionを確定する
 
 ### 2. Inventory Reader
 
 責務:
 
 - cluster inventoryから現在状態を取得する
-- Deployment, Service, Podの概要を正規化する
+- Knative Service, Revision, Pod の概要を正規化する
 - Controller内部の比較モデルに変換する
 
 ### 3. Plan Builder
@@ -110,7 +119,7 @@ Function Controllerは内部的に以下へ分割して考える。
 責務:
 
 - desired stateとcurrent stateの差分を判定する
-- create/update/delete/restart planを生成する
+- create/update/delete/traffic-update planを生成する
 
 ### 4. Rollout Tracker
 
@@ -131,43 +140,46 @@ Function Controllerは内部的に以下へ分割して考える。
 
 Controllerが利用する主な入力は以下。
 
-### Function
+### FunctionDefinition
 
 - `id`
 - `name`
+- `runtime_kind`
+- `default_timeout_seconds`
+- `default_memory_mb`
+- `default_cpu_millis`
+
+### FunctionRevision
+
+- `id`
+- `function_definition_id`
 - `version`
 - `image`
+- `image_digest`
 - `command`
 - `args`
 - `env`
-- `timeout_seconds`
-- `memory_mb`
-- `cpu_millis`
-- `max_concurrency`
+- `port`
 
 ### FunctionDeploymentTarget
 
 - `id`
-- `function_id`
+- `function_definition_id`
 - `cluster_id`
 - `namespace`
-- `desired_version`
-- `replicas`
+- `desired_revision_id`
 - `rollout_strategy`
+- `traffic_percent`
+- `min_scale`
+- `max_scale`
+- `container_concurrency`
 - `enabled`
-
-### Cluster
-
-- `id`
-- `status`
-- `region`
-- `environment`
 
 ### Cluster Inventory
 
 - `cluster_id`
-- `deployments`
-- `services`
+- `knative_services`
+- `revisions`
 - `pods`
 - `observed_at`
 
@@ -195,35 +207,36 @@ Controllerの主な出力は `SyncPlan` である。
 
 ### Action Type
 
-- `APPLY_DEPLOYMENT`
-- `APPLY_SERVICE`
-- `DELETE_DEPLOYMENT`
-- `DELETE_SERVICE`
-- `RESTART_DEPLOYMENT`
+- `APPLY_KSERVICE`
+- `DELETE_KSERVICE`
+- `UPDATE_KSERVICE_TRAFFIC`
 - `NOOP`
 
 ## 内部データモデル
 
 実装では以下の内部DTOを持つと整理しやすい。
 
-### DesiredFunctionInstance
+### DesiredFunctionService
 
-clusterに対して最終的に存在してほしいFunction実体。
+clusterに対して最終的に存在してほしいKnative Service実体。
 
 項目:
 
-- `function_id`
+- `function_definition_id`
 - `function_name`
-- `version`
+- `desired_revision_id`
+- `desired_revision_name`
 - `cluster_id`
 - `namespace`
 - `image`
-- `replicas`
+- `port`
+- `timeout_seconds`
+- `min_scale`
+- `max_scale`
+- `container_concurrency`
 - `env`
-- `resources`
-- `service_port`
 
-### ObservedFunctionInstance
+### ObservedFunctionService
 
 inventoryから得られた現状態。
 
@@ -231,46 +244,45 @@ inventoryから得られた現状態。
 
 - `cluster_id`
 - `namespace`
-- `deployment_name`
+- `kservice_name`
+- `latest_ready_revision`
+- `traffic`
 - `image`
-- `available_replicas`
 - `ready`
-- `service_exists`
 - `observed_generation`
 
-### DeploymentDiff
+### ServiceDiff
 
 差分判定結果。
 
 項目:
 
 - `action_required`
-- `deployment_changed`
-- `service_changed`
+- `spec_changed`
+- `traffic_changed`
 - `reason`
 
 ## 命名ルール
 
-Controllerが生成するk8sリソース名は一貫させる。
+Controllerが生成するKnativeリソース名は一貫させる。
 
 推奨:
 
-- Deployment名: `fn-{function_name}-{version}`
-- Service名: `fn-{function_name}`
+- KService名: `{function_name}`
+- Revision名:
+  Knativeの自動命名に委ねるか、必要なら annotation でヒントを持つ
 - Label:
   - `edgebase.io/function-name`
   - `edgebase.io/function-version`
   - `edgebase.io/managed-by=function-controller`
-
-versionをService名に含めないのは、ルーティング先を安定させるためである。
 
 ## Plan生成アルゴリズム
 
 ### 手順
 
 1. clusterに紐づく有効な `FunctionDeploymentTarget` を取得
-2. targetからdesired function instancesを構築
-3. inventoryからobserved function instancesを構築
+2. targetからdesired function servicesを構築
+3. inventoryからobserved function servicesを構築
 4. desiredとobservedを `function_name + namespace` で対応付け
 5. 差分を生成
 6. action順序を決定
@@ -287,20 +299,29 @@ versionをService名に含めないのは、ルーティング先を安定させ
 
 生成するaction:
 
-- `APPLY_DEPLOYMENT`
-- `APPLY_SERVICE`
+- `APPLY_KSERVICE`
 
 #### 更新
 
 条件:
 
 - desiredとobservedが存在する
-- image, env, resources, replicas のいずれかが異なる
+- image, env, timeout, autoscaling設定 のいずれかが異なる
 
 生成するaction:
 
-- `APPLY_DEPLOYMENT`
-- 必要なら `APPLY_SERVICE`
+- `APPLY_KSERVICE`
+
+#### traffic更新
+
+条件:
+
+- desired revisionやtraffic比率が変化している
+- KService自体は存在している
+
+生成するaction:
+
+- `UPDATE_KSERVICE_TRAFFIC`
 
 #### 削除
 
@@ -311,36 +332,22 @@ versionをService名に含めないのは、ルーティング先を安定させ
 
 生成するaction:
 
-- `DELETE_SERVICE`
-- `DELETE_DEPLOYMENT`
-
-#### 再起動
-
-条件:
-
-- specは同じ
-- pod不健康が続いている
-
-生成するaction:
-
-- `RESTART_DEPLOYMENT`
+- `DELETE_KSERVICE`
 
 ## action順序
 
 基本順序は以下。
 
-1. `APPLY_DEPLOYMENT`
-2. `APPLY_SERVICE`
-3. `RESTART_DEPLOYMENT`
-4. `DELETE_SERVICE`
-5. `DELETE_DEPLOYMENT`
+1. `APPLY_KSERVICE`
+2. `UPDATE_KSERVICE_TRAFFIC`
+3. `DELETE_KSERVICE`
 
 削除は最後に回す。
 
 理由:
 
 - 先に削除すると通信断が発生しやすい
-- rollout中のService欠落を避ける
+- rollout中のrevision欠落を避ける
 
 ## Sync Plan例
 
@@ -348,36 +355,43 @@ versionをService名に含めないのは、ルーティング先を安定させ
 {
   "sync_id": "uuid",
   "cluster_id": "cluster-1",
-  "generated_at": "2026-03-06T12:00:00Z",
+  "generated_at": "2026-03-07T12:00:00Z",
   "generation": 12,
   "actions": [
     {
-      "type": "APPLY_DEPLOYMENT",
-      "resource_type": "Deployment",
-      "resource_name": "fn-telemetry-normalizer-v2",
+      "type": "APPLY_KSERVICE",
+      "resource_type": "KnativeService",
+      "resource_name": "telemetry-normalizer",
       "namespace": "edge-functions",
       "desired_spec": {
-        "image": "registry.local/telemetry-normalizer:v2",
-        "replicas": 1,
-        "env": {
-          "LOG_LEVEL": "info"
-        }
+        "image": "registry.local/telemetry-normalizer@sha256:abcd",
+        "port": 8080,
+        "timeout_seconds": 3,
+        "min_scale": 0,
+        "max_scale": 20,
+        "container_concurrency": 10
       },
-      "reason": "version changed from v1 to v2",
+      "reason": "new revision v2 must be deployed",
       "order": 1
     },
     {
-      "type": "APPLY_SERVICE",
-      "resource_type": "Service",
-      "resource_name": "fn-telemetry-normalizer",
+      "type": "UPDATE_KSERVICE_TRAFFIC",
+      "resource_type": "KnativeService",
+      "resource_name": "telemetry-normalizer",
       "namespace": "edge-functions",
       "desired_spec": {
-        "selector": {
-          "edgebase.io/function-name": "telemetry-normalizer",
-          "edgebase.io/function-version": "v2"
-        }
+        "traffic": [
+          {
+            "revision": "telemetry-normalizer-v1",
+            "percent": 90
+          },
+          {
+            "revision": "telemetry-normalizer-v2",
+            "percent": 10
+          }
+        ]
       },
-      "reason": "service selector must point to v2",
+      "reason": "canary rollout step",
       "order": 2
     }
   ]
@@ -396,13 +410,8 @@ Cluster Agentはapply後にACKを返す。
   "success": true,
   "results": [
     {
-      "resource_type": "Deployment",
-      "resource_name": "fn-telemetry-normalizer-v2",
-      "status": "applied"
-    },
-    {
-      "resource_type": "Service",
-      "resource_name": "fn-telemetry-normalizer",
+      "resource_type": "KnativeService",
+      "resource_name": "telemetry-normalizer",
       "status": "applied"
     }
   ]
@@ -462,6 +471,7 @@ pending -> planning -> applying -> ready
 - apply failure
 - drift detected
 - stale inventory
+- knative unavailable
 
 ### 対応
 
@@ -486,13 +496,18 @@ pending -> planning -> applying -> ready
 - 一定時間以上古いinventoryを比較に使わない
 - 必要なら `NOOP` ではなく `inventory stale` エラーを返す
 
+#### knative unavailable
+
+- cluster側のKnative Serving不整合として記録する
+- apply retry対象とする
+
 ## 再試行方針
 
 MVPでは単純化する。
 
 - 自動retryはしない
 - 次回agent polling時に再度planを返す
-- 同一内容なら同一generationのplanを返してよい
+- 同一desired stateなら同一generationのplanを返してよい
 
 将来的には以下を追加できる。
 
@@ -512,12 +527,13 @@ Controllerは厳密な分散トランザクションを目指さない。
 
 ## 必要なRepository
 
-想定追加:
+想定追加または更新:
 
 - `function_deployment_target_repository.go`
 - `cluster_inventory_repository.go`
 - `cluster_sync_repository.go`
-- `function_runtime_repository.go`
+- `function_revision_repository.go`
+- `route_repository.go`
 
 ## 想定Serviceインターフェース
 
@@ -543,33 +559,31 @@ Controllerは独立プロセスでなく、初期は `controle-plane/internal/se
 
 ## MVP実装範囲
 
-- FunctionとTargetからdesired instanceを生成
+- FunctionRevisionとTargetからdesired KServiceを生成
 - inventoryとの差分判定
-- Deployment/Serviceのapply/delete planを返す
+- `APPLY_KSERVICE` / `DELETE_KSERVICE` planを返す
 - ACKを保存して状態更新
-- 単純なrolling updateを前提とする
 
 ## 非MVP
 
-- canary rollout
-- weighted traffic split
+- canary rolloutの自動ステップ進行
+- weighted traffic splitの高度制御
 - multi-cluster failover自動切替
-- pod単位の細かい自己修復
 - progressive delivery
 
 ## 実装タスク
 
 ### Task 1
 
-- `SyncPlan`, `SyncAction`, `SyncAck` DTOを定義する
+- `SyncPlan`, `SyncAction`, `SyncAck` DTOをKnative前提で更新する
 
 ### Task 2
 
-- desired state構築処理を実装する
+- desired KService構築処理を実装する
 
 ### Task 3
 
-- inventory正規化処理を実装する
+- Knative inventory正規化処理を実装する
 
 ### Task 4
 
@@ -595,6 +609,6 @@ Function Controllerは、Function基盤の中で最も重要な「定義から�
 
 - desired state中心であること
 - Cluster Agentへ渡すplanを冪等に生成すること
-- apply結果を状態遷移として正しく反映すること
+- Knative Serviceへの反映結果を状態遷移として正しく扱うこと
 
-MVPでは、Deployment/Serviceの差分同期に絞って設計するのが妥当である。
+MVPでは、Knative Service差分同期に絞って設計するのが妥当である。

@@ -100,6 +100,71 @@ func (m *MockArtifactService) GetArtifactData(ctx context.Context, id, version s
 	return args.Get(0).([]byte), args.Error(1)
 }
 
+type MockFunctionCatalogService struct {
+	mock.Mock
+}
+
+func (m *MockFunctionCatalogService) CreateDefinition(ctx context.Context, name, description, runtimeKind string, defaultTimeoutSeconds, defaultMemoryMB, defaultCPUMillis int32) (*model.FunctionDefinition, error) {
+	args := m.Called(ctx, name, description, runtimeKind, defaultTimeoutSeconds, defaultMemoryMB, defaultCPUMillis)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*model.FunctionDefinition), args.Error(1)
+}
+
+func (m *MockFunctionCatalogService) GetDefinition(ctx context.Context, id uuid.UUID) (*model.FunctionDefinition, error) {
+	args := m.Called(ctx, id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*model.FunctionDefinition), args.Error(1)
+}
+
+func (m *MockFunctionCatalogService) ListDefinitions(ctx context.Context) ([]model.FunctionDefinition, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]model.FunctionDefinition), args.Error(1)
+}
+
+func (m *MockFunctionCatalogService) CreateRevision(ctx context.Context, functionDefinitionID uuid.UUID, input service.CreateFunctionRevisionInput) (*model.FunctionRevision, error) {
+	args := m.Called(ctx, functionDefinitionID, input)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*model.FunctionRevision), args.Error(1)
+}
+
+type MockFunctionDeploymentService struct {
+	mock.Mock
+}
+
+func (m *MockFunctionDeploymentService) CreateTargets(ctx context.Context, functionDefinitionID uuid.UUID, input service.CreateDeploymentTargetsInput) ([]model.FunctionDeploymentTarget, error) {
+	args := m.Called(ctx, functionDefinitionID, input)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]model.FunctionDeploymentTarget), args.Error(1)
+}
+
+type MockFunctionControllerService struct {
+	mock.Mock
+}
+
+func (m *MockFunctionControllerService) GetClusterSyncPlan(ctx context.Context, clusterID uuid.UUID) (*service.SyncPlan, error) {
+	args := m.Called(ctx, clusterID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*service.SyncPlan), args.Error(1)
+}
+
+func (m *MockFunctionControllerService) AcknowledgeClusterSync(ctx context.Context, clusterID, syncID uuid.UUID, result service.SyncResult) error {
+	args := m.Called(ctx, clusterID, syncID, result)
+	return args.Error(0)
+}
+
 type MockSchemaService struct {
 	mock.Mock
 }
@@ -168,12 +233,15 @@ func TestRegisterNode(t *testing.T) {
 	mockNodeSvc := new(MockNodeService)
 	mockSyncSvc := new(MockSyncService)
 	mockArtifactSvc := new(MockArtifactService)
+	mockFunctionSvc := new(MockFunctionCatalogService)
+	mockDeploymentSvc := new(MockFunctionDeploymentService)
+	mockControllerSvc := new(MockFunctionControllerService)
 	mockSchemaSvc := new(MockSchemaService)
 	mockTelemetrySvc := new(MockTelemetryService)
 	mockInventorySvc := new(MockInventoryService)
 
 	authMgr := auth.NewManager("test-secret")
-	h := NewHandler(mockNodeSvc, mockSyncSvc, mockArtifactSvc, mockSchemaSvc, mockTelemetrySvc, mockInventorySvc, authMgr, time.Hour, nil, nil)
+	h := NewHandler(mockNodeSvc, mockSyncSvc, mockArtifactSvc, mockFunctionSvc, mockDeploymentSvc, mockControllerSvc, mockSchemaSvc, mockTelemetrySvc, mockInventorySvc, authMgr, time.Hour, nil, nil)
 	app := fiber.New()
 	h.RegisterRoutes(app)
 
@@ -208,20 +276,73 @@ func TestRegisterNode(t *testing.T) {
 	})
 }
 
+func TestFunctionRoutes(t *testing.T) {
+	mockNodeSvc := new(MockNodeService)
+	mockSyncSvc := new(MockSyncService)
+	mockArtifactSvc := new(MockArtifactService)
+	mockFunctionSvc := new(MockFunctionCatalogService)
+	mockDeploymentSvc := new(MockFunctionDeploymentService)
+	mockControllerSvc := new(MockFunctionControllerService)
+	mockSchemaSvc := new(MockSchemaService)
+	mockTelemetrySvc := new(MockTelemetryService)
+	mockInventorySvc := new(MockInventoryService)
+
+	authMgr := auth.NewManager("test-secret")
+	h := NewHandler(mockNodeSvc, mockSyncSvc, mockArtifactSvc, mockFunctionSvc, mockDeploymentSvc, mockControllerSvc, mockSchemaSvc, mockTelemetrySvc, mockInventorySvc, authMgr, time.Hour, nil, nil)
+	app := fiber.New()
+	h.RegisterRoutes(app)
+
+	token, err := authMgr.GenerateToken(uuid.New(), time.Hour)
+	assert.NoError(t, err)
+
+	t.Run("CreateFunctionDefinition", func(t *testing.T) {
+		definition := &model.FunctionDefinition{
+			ID:                    uuid.New(),
+			Name:                  "telemetry-normalizer",
+			RuntimeKind:           "container",
+			DefaultTimeoutSeconds: 3,
+			DefaultMemoryMB:       128,
+			DefaultCPUMillis:      250,
+		}
+		mockFunctionSvc.On("CreateDefinition", mock.Anything, "telemetry-normalizer", "normalize telemetry", "container", int32(3), int32(128), int32(250)).Return(definition, nil).Once()
+
+		body, _ := json.Marshal(map[string]interface{}{
+			"name":                    "telemetry-normalizer",
+			"description":             "normalize telemetry",
+			"runtime_kind":            "container",
+			"default_timeout_seconds": 3,
+			"default_memory_mb":       128,
+			"default_cpu_millis":      250,
+		})
+		req := httptest.NewRequest("POST", "/api/v1/functions", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := app.Test(req)
+		assert.NoError(t, err)
+		assert.Equal(t, http.StatusCreated, resp.StatusCode)
+		mockFunctionSvc.AssertExpectations(t)
+	})
+
+}
+
 func TestClusterCompatibilityRoutes(t *testing.T) {
-	newApp := func(clusterID uuid.UUID) (*fiber.App, *auth.Manager, *MockNodeService, *MockSyncService, *MockInventoryService) {
+	newApp := func(clusterID uuid.UUID) (*fiber.App, *auth.Manager, *MockNodeService, *MockFunctionControllerService, *MockInventoryService) {
 		mockNodeSvc := new(MockNodeService)
 		mockSyncSvc := new(MockSyncService)
 		mockArtifactSvc := new(MockArtifactService)
+		mockFunctionSvc := new(MockFunctionCatalogService)
+		mockDeploymentSvc := new(MockFunctionDeploymentService)
+		mockControllerSvc := new(MockFunctionControllerService)
 		mockSchemaSvc := new(MockSchemaService)
 		mockTelemetrySvc := new(MockTelemetryService)
 		mockInventorySvc := new(MockInventoryService)
 
 		authMgr := auth.NewManager("test-secret")
-		h := NewHandler(mockNodeSvc, mockSyncSvc, mockArtifactSvc, mockSchemaSvc, mockTelemetrySvc, mockInventorySvc, authMgr, time.Hour, nil, nil)
+		h := NewHandler(mockNodeSvc, mockSyncSvc, mockArtifactSvc, mockFunctionSvc, mockDeploymentSvc, mockControllerSvc, mockSchemaSvc, mockTelemetrySvc, mockInventorySvc, authMgr, time.Hour, nil, nil)
 		app := fiber.New()
 		h.RegisterRoutes(app)
-		return app, authMgr, mockNodeSvc, mockSyncSvc, mockInventorySvc
+		return app, authMgr, mockNodeSvc, mockControllerSvc, mockInventorySvc
 	}
 
 	t.Run("ClusterHeartbeat delegates to node heartbeat", func(t *testing.T) {
@@ -241,15 +362,16 @@ func TestClusterCompatibilityRoutes(t *testing.T) {
 		mockNodeSvc.AssertExpectations(t)
 	})
 
-	t.Run("ClusterSync delegates to sync service", func(t *testing.T) {
+	t.Run("ClusterSync delegates to controller service", func(t *testing.T) {
 		clusterID := uuid.New()
-		app, authMgr, _, mockSyncSvc, _ := newApp(clusterID)
+		app, authMgr, _, mockControllerSvc, _ := newApp(clusterID)
 		token, err := authMgr.GenerateToken(clusterID, time.Hour)
 		assert.NoError(t, err)
 
-		mockSyncSvc.On("GetSyncPlan", mock.Anything, clusterID, service.NodeState{}).Return(&service.SyncPlan{
-			SyncID:  uuid.New(),
-			Actions: []service.SyncAction{},
+		mockControllerSvc.On("GetClusterSyncPlan", mock.Anything, clusterID).Return(&service.SyncPlan{
+			SyncID:     uuid.New(),
+			Generation: 1,
+			Actions:    []service.SyncAction{},
 		}, nil).Once()
 
 		req := httptest.NewRequest("GET", "/api/v1/clusters/"+clusterID.String()+"/sync", nil)
@@ -258,7 +380,7 @@ func TestClusterCompatibilityRoutes(t *testing.T) {
 
 		assert.NoError(t, err)
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
-		mockSyncSvc.AssertExpectations(t)
+		mockControllerSvc.AssertExpectations(t)
 	})
 
 	t.Run("ClusterInventory accepts payload", func(t *testing.T) {

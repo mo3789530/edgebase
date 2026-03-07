@@ -57,6 +57,14 @@ func (c *Client) FetchSyncPlan(ctx context.Context, clusterID uuid.UUID) (*model
 	return &plan, nil
 }
 
+func (c *Client) FetchGatewayRoutes(ctx context.Context, clusterID uuid.UUID) ([]model.GatewayRoute, error) {
+	var routes []model.GatewayRoute
+	if err := c.getJSON(ctx, c.path(c.paths.Gateway, clusterID), &routes); err != nil {
+		return nil, err
+	}
+	return routes, nil
+}
+
 func (c *Client) ReportSyncAck(ctx context.Context, clusterID uuid.UUID, ack model.SyncAck) error {
 	req := map[string]any{
 		"sync_id": ack.SyncID,

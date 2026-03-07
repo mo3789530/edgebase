@@ -10,6 +10,7 @@ import (
 
 type Client struct {
 	clientset *kubernetes.Clientset
+	config    *rest.Config
 }
 
 func New(kubeconfigPath string) (*Client, error) {
@@ -23,11 +24,15 @@ func New(kubeconfigPath string) (*Client, error) {
 		return nil, fmt.Errorf("create kubernetes client: %w", err)
 	}
 
-	return &Client{clientset: clientset}, nil
+	return &Client{clientset: clientset, config: cfg}, nil
 }
 
 func (c *Client) Clientset() kubernetes.Interface {
 	return c.clientset
+}
+
+func (c *Client) RESTConfig() *rest.Config {
+	return c.config
 }
 
 func buildConfig(kubeconfigPath string) (*rest.Config, error) {

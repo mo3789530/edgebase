@@ -12,17 +12,21 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1unstructured "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/dynamic"
 )
 
 type K8sApplier struct {
 	clientset kubernetes.Interface
+	dynamic   dynamic.Interface
 }
 
-func NewK8sApplier(clientset kubernetes.Interface) *K8sApplier {
-	return &K8sApplier{clientset: clientset}
+func NewK8sApplier(clientset kubernetes.Interface, dynamicClient dynamic.Interface) *K8sApplier {
+	return &K8sApplier{clientset: clientset, dynamic: dynamicClient}
 }
 
 func (a *K8sApplier) Apply(ctx context.Context, plan *model.SyncPlan) (model.SyncAck, error) {
@@ -51,6 +55,10 @@ func (a *K8sApplier) applyAction(ctx context.Context, action model.SyncAction) m
 		return a.deleteService(ctx, action)
 	case model.ActionRestartDeployment:
 		return a.restartDeployment(ctx, action)
+	case model.ActionApplyKService:
+		return a.applyKService(ctx, action)
+	case model.ActionDeleteKService:
+		return a.deleteKService(ctx, action)
 	default:
 		return model.SyncAckResource{ResourceType: action.Type, ResourceName: action.Description, Status: "skipped", ErrorMessage: "unsupported action"}
 	}
@@ -77,6 +85,18 @@ type servicePayload struct {
 type namedPayload struct {
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
+}
+
+type kservicePayload struct {
+	Namespace            string            `json:"namespace"`
+	Name                 string            `json:"name"`
+	Image                string            `json:"image"`
+	Port                 int32             `json:"port,omitempty"`
+	TimeoutSeconds       int64             `json:"timeout_seconds,omitempty"`
+	MinScale             *int32            `json:"min_scale,omitempty"`
+	MaxScale             *int32            `json:"max_scale,omitempty"`
+	ContainerConcurrency *int64            `json:"container_concurrency,omitempty"`
+	Env                  map[string]string `json:"env,omitempty"`
 }
 
 func (a *K8sApplier) applyDeployment(ctx context.Context, action model.SyncAction) model.SyncAckResource {
@@ -250,6 +270,127 @@ func (a *K8sApplier) restartDeployment(ctx context.Context, action model.SyncAct
 		return failed(action.Type, payload.Name, err)
 	}
 	return applied(action.Type, payload.Name)
+}
+
+func (a *K8sApplier) applyKService(ctx context.Context, action model.SyncAction) model.SyncAckResource {
+	if a.dynamic == nil {
+		return failed(action.Type, action.Description, errors.New("dynamic kubernetes client is required"))
+	}
+	payload, err := decode[kservicePayload](action.Payload)
+	if err != nil {
+		return failed(action.Type, action.Description, err)
+	}
+	if payload.Namespace == "" || payload.Name == "" || payload.Image == "" {
+		return failed(action.Type, payload.Name, errors.New("namespace, name and image are required"))
+	}
+	if payload.Port == 0 {
+		payload.Port = 8080
+	}
+	if payload.TimeoutSeconds == 0 {
+		payload.TimeoutSeconds = 3
+	}
+
+	resource := knativeServiceGVR()
+	client := a.dynamic.Resource(resource).Namespace(payload.Namespace)
+
+	obj := &metav1unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "serving.knative.dev/v1",
+			"kind":       "Service",
+			"metadata": map[string]interface{}{
+				"name":      payload.Name,
+				"namespace": payload.Namespace,
+				"labels": map[string]interface{}{
+					"edgebase.io/managed-by": "cluster-agent",
+				},
+			},
+			"spec": map[string]interface{}{
+				"template": map[string]interface{}{
+					"metadata": map[string]interface{}{
+						"annotations": buildKServiceAnnotations(payload),
+					},
+					"spec": map[string]interface{}{
+						"containerConcurrency": payload.ContainerConcurrency,
+						"timeoutSeconds":       payload.TimeoutSeconds,
+						"containers": []interface{}{
+							map[string]interface{}{
+								"image": payload.Image,
+								"ports": []interface{}{
+									map[string]interface{}{"containerPort": payload.Port},
+								},
+								"env": buildKServiceEnv(payload.Env),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	existing, err := client.Get(ctx, payload.Name, metav1.GetOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return failed(action.Type, payload.Name, err)
+	}
+	if apierrors.IsNotFound(err) {
+		if _, err := client.Create(ctx, obj, metav1.CreateOptions{}); err != nil {
+			return failed(action.Type, payload.Name, err)
+		}
+		return applied(action.Type, payload.Name)
+	}
+
+	obj.SetResourceVersion(existing.GetResourceVersion())
+	if _, err := client.Update(ctx, obj, metav1.UpdateOptions{}); err != nil {
+		return failed(action.Type, payload.Name, err)
+	}
+	return applied(action.Type, payload.Name)
+}
+
+func (a *K8sApplier) deleteKService(ctx context.Context, action model.SyncAction) model.SyncAckResource {
+	if a.dynamic == nil {
+		return failed(action.Type, action.Description, errors.New("dynamic kubernetes client is required"))
+	}
+	payload, err := decode[namedPayload](action.Payload)
+	if err != nil {
+		return failed(action.Type, action.Description, err)
+	}
+	if payload.Namespace == "" || payload.Name == "" {
+		return failed(action.Type, payload.Name, errors.New("namespace and name are required"))
+	}
+	err = a.dynamic.Resource(knativeServiceGVR()).Namespace(payload.Namespace).Delete(ctx, payload.Name, metav1.DeleteOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return failed(action.Type, payload.Name, err)
+	}
+	return deleted(action.Type, payload.Name)
+}
+
+func knativeServiceGVR() schema.GroupVersionResource {
+	return schema.GroupVersionResource{
+		Group:    "serving.knative.dev",
+		Version:  "v1",
+		Resource: "services",
+	}
+}
+
+func buildKServiceAnnotations(payload kservicePayload) map[string]interface{} {
+	annotations := map[string]interface{}{}
+	if payload.MinScale != nil {
+		annotations["autoscaling.knative.dev/min-scale"] = fmt.Sprintf("%d", *payload.MinScale)
+	}
+	if payload.MaxScale != nil {
+		annotations["autoscaling.knative.dev/max-scale"] = fmt.Sprintf("%d", *payload.MaxScale)
+	}
+	return annotations
+}
+
+func buildKServiceEnv(values map[string]string) []interface{} {
+	if len(values) == 0 {
+		return nil
+	}
+	env := make([]interface{}, 0, len(values))
+	for key, value := range values {
+		env = append(env, map[string]interface{}{"name": key, "value": value})
+	}
+	return env
 }
 
 func decode[T any](raw json.RawMessage) (T, error) {

@@ -21,6 +21,14 @@ func (m *MockInventoryRepository) CreateSnapshot(ctx context.Context, snapshot *
 	return args.Error(0)
 }
 
+func (m *MockInventoryRepository) GetLatestSnapshot(ctx context.Context, clusterID uuid.UUID) (*model.ClusterInventorySnapshot, error) {
+	args := m.Called(ctx, clusterID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*model.ClusterInventorySnapshot), args.Error(1)
+}
+
 func TestInventoryService_SaveSnapshot(t *testing.T) {
 	repo := new(MockInventoryRepository)
 	svc := NewInventoryService(repo)

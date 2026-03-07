@@ -38,7 +38,13 @@ func main() {
 		logger.Warn("failed to initialize kubernetes client, fallback to noop components", "error", err)
 	} else {
 		collector = inventorySvc.NewK8sCollector(k8sClient.Clientset(), cfg.TargetNamespaces)
-		resourceApplier = apply.NewK8sApplier(k8sClient.Clientset())
+		dynamicClient, dynamicErr := dynamic.NewForConfig(k8sClient.RESTConfig())
+		if dynamicErr != nil {
+			logger.Warn("failed to initialize dynamic kubernetes client, fallback to noop knative apply", "error", dynamicErr)
+			resourceApplier = apply.NewK8sApplier(k8sClient.Clientset(), nil)
+		} else {
+			resourceApplier = apply.NewK8sApplier(k8sClient.Clientset(), dynamicClient)
+		}
 	}
 
 	hbService := heartbeatSvc.New(

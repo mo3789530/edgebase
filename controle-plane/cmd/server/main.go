@@ -50,20 +50,7 @@ func main() {
 	}()
 
 	// Auto Migrate
-	if err := dbConn.AutoMigrate(
-		&model.Node{},
-		&model.Function{},
-		&model.SchemaMigration{},
-		&model.NodeFunctionDeployment{},
-		&model.SyncRecord{},
-		&model.Device{},
-		&model.TelemetryData{},
-		&model.Command{},
-		&model.SyncStatus{},
-		&model.NodeSchemaStatus{},
-		&model.AuditLog{},
-		&model.ClusterInventorySnapshot{},
-	); err != nil {
+	if err := dbConn.AutoMigrate(model.AutoMigrateModels()...); err != nil {
 		log.Fatalf("failed to migrate DB: %v", err)
 	}
 
@@ -96,6 +83,10 @@ func main() {
 	// Initialize Repositories
 	nodeRepo := repository.NewNodeRepository(dbConn)
 	funcRepo := repository.NewFunctionRepository(dbConn)
+	functionDefinitionRepo := repository.NewFunctionDefinitionRepository(dbConn)
+	functionRevisionRepo := repository.NewFunctionRevisionRepository(dbConn)
+	functionDeploymentTargetRepo := repository.NewFunctionDeploymentTargetRepository(dbConn)
+	routeRepo := repository.NewRouteRepository(dbConn)
 	schemaRepo := repository.NewSchemaRepository(dbConn)
 	syncRepo := repository.NewSyncRepository(dbConn)
 	telemetryRepo := repository.NewTelemetryRepository(dbConn)
@@ -104,6 +95,10 @@ func main() {
 	// Initialize Services
 	nodeSvc := service.NewNodeService(nodeRepo)
 	artifactSvc := service.NewArtifactService(funcRepo, storageClient)
+	functionSvc := service.NewFunctionCatalogService(functionDefinitionRepo, functionRevisionRepo)
+	functionDeploymentSvc := service.NewFunctionDeploymentService(functionDefinitionRepo, functionRevisionRepo, functionDeploymentTargetRepo)
+	functionControllerSvc := service.NewFunctionControllerService(functionDeploymentTargetRepo, functionDefinitionRepo, functionRevisionRepo, inventoryRepo)
+	routeSvc := service.NewRouteService(routeRepo, functionDeploymentTargetRepo, functionDefinitionRepo)
 	schemaSvc := service.NewSchemaService(schemaRepo, mqttClient)
 	syncSvc := service.NewSyncService(syncRepo, nodeRepo, funcRepo, schemaRepo, artifactSvc)
 	telemetrySvc := service.NewTelemetryService(telemetryRepo)
@@ -188,7 +183,7 @@ func main() {
 	app.Get("/metrics", healthHandler.Metrics)
 
 	// Register API routes
-	h := handler.NewHandler(nodeSvc, syncSvc, artifactSvc, schemaSvc, telemetrySvc, inventorySvc, authMgr, time.Duration(cfg.TokenExpiryHours)*time.Hour, metricCollector, logWriter)
+	h := handler.NewHandler(nodeSvc, syncSvc, artifactSvc, functionSvc, functionDeploymentSvc, functionControllerSvc, routeSvc, schemaSvc, telemetrySvc, inventorySvc, authMgr, time.Duration(cfg.TokenExpiryHours)*time.Hour, metricCollector, logWriter)
 	h.RegisterRoutes(app)
 
 	// Setup graceful shutdown

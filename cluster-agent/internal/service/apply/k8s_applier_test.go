@@ -9,13 +9,17 @@ import (
 	"github.com/google/uuid"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 func TestK8sApplier_ApplyDeploymentAndDelete(t *testing.T) {
 	clientset := fake.NewSimpleClientset()
-	applier := NewK8sApplier(clientset)
+	applier := NewK8sApplier(clientset, nil)
 
 	createPayload, _ := json.Marshal(map[string]any{
 		"namespace": "edge-functions",
@@ -75,7 +79,7 @@ func TestK8sApplier_ApplyService(t *testing.T) {
 	clientset := fake.NewSimpleClientset(
 		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "fn-hello-v1", Namespace: "edge-functions"}},
 	)
-	applier := NewK8sApplier(clientset)
+	applier := NewK8sApplier(clientset, nil)
 
 	payload, _ := json.Marshal(map[string]any{
 		"namespace":   "edge-functions",
@@ -105,7 +109,7 @@ func TestK8sApplier_ApplyService(t *testing.T) {
 
 func TestK8sApplier_UnsupportedActionSkipped(t *testing.T) {
 	clientset := fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "edge-functions"}})
-	applier := NewK8sApplier(clientset)
+	applier := NewK8sApplier(clientset, nil)
 
 	ack, err := applier.Apply(context.Background(), &model.SyncPlan{
 		SyncID:  uuid.New(),
@@ -119,5 +123,45 @@ func TestK8sApplier_UnsupportedActionSkipped(t *testing.T) {
 	}
 	if len(ack.Results) != 1 || ack.Results[0].Status != "skipped" {
 		t.Fatalf("unexpected results: %+v", ack.Results)
+	}
+}
+
+func TestK8sApplier_ApplyKService(t *testing.T) {
+	clientset := fake.NewSimpleClientset()
+	scheme := runtime.NewScheme()
+	dynamicClient := dynamicfake.NewSimpleDynamicClient(scheme)
+	applier := NewK8sApplier(clientset, dynamicClient)
+
+	payload, _ := json.Marshal(map[string]any{
+		"namespace":             "edge-functions",
+		"name":                  "telemetry-normalizer",
+		"image":                 "registry.local/telemetry-normalizer@sha256:abcd",
+		"port":                  8080,
+		"timeout_seconds":       3,
+		"min_scale":             0,
+		"max_scale":             20,
+		"container_concurrency": 10,
+		"env":                   map[string]string{"MODE": "prod"},
+	})
+
+	ack, err := applier.Apply(context.Background(), &model.SyncPlan{
+		SyncID:  uuid.New(),
+		Actions: []model.SyncAction{{Type: model.ActionApplyKService, Payload: payload}},
+	})
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if !ack.Success {
+		t.Fatalf("ack.Success = false, results=%+v", ack.Results)
+	}
+
+	obj, err := dynamicClient.Resource(schema.GroupVersionResource{
+		Group: "serving.knative.dev", Version: "v1", Resource: "services",
+	}).Namespace("edge-functions").Get(context.Background(), "telemetry-normalizer", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("kservice not created: %v", err)
+	}
+	if obj.GetName() != "telemetry-normalizer" {
+		t.Fatalf("name = %s", obj.GetName())
 	}
 }

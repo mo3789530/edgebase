@@ -15,6 +15,10 @@ type Handler struct {
 	nodeSvc         service.NodeService
 	syncSvc         service.SyncService
 	artifactSvc     service.ArtifactService
+	functionSvc     service.FunctionCatalogService
+	deploymentSvc   service.FunctionDeploymentService
+	controllerSvc   service.FunctionControllerService
+	routeSvc        service.RouteService
 	schemaSvc       service.SchemaService
 	telemetrySvc    service.TelemetryService
 	inventorySvc    service.InventoryService
@@ -28,6 +32,10 @@ func NewHandler(
 	nodeSvc service.NodeService,
 	syncSvc service.SyncService,
 	artifactSvc service.ArtifactService,
+	functionSvc service.FunctionCatalogService,
+	deploymentSvc service.FunctionDeploymentService,
+	controllerSvc service.FunctionControllerService,
+	routeSvc service.RouteService,
 	schemaSvc service.SchemaService,
 	telemetrySvc service.TelemetryService,
 	inventorySvc service.InventoryService,
@@ -40,6 +48,10 @@ func NewHandler(
 		nodeSvc:         nodeSvc,
 		syncSvc:         syncSvc,
 		artifactSvc:     artifactSvc,
+		functionSvc:     functionSvc,
+		deploymentSvc:   deploymentSvc,
+		controllerSvc:   controllerSvc,
+		routeSvc:        routeSvc,
 		schemaSvc:       schemaSvc,
 		telemetrySvc:    telemetrySvc,
 		inventorySvc:    inventorySvc,
@@ -63,22 +75,25 @@ func (h *Handler) RegisterRoutes(app *fiber.App) {
 
 	// Cluster-agent compatibility endpoints
 	clusters := api.Group("/clusters", auth.AuthMiddleware(h.authMgr))
-	clusters.Post("/:id/heartbeat", h.ClusterHeartbeat)
-	clusters.Post("/:id/inventory", h.ClusterInventory)
-	clusters.Get("/:id/sync", h.ClusterGetSyncInfo)
-	clusters.Post("/:id/sync/ack", h.ClusterAckSync)
+		clusters.Post("/:id/heartbeat", h.ClusterHeartbeat)
+		clusters.Post("/:id/inventory", h.ClusterInventory)
+		clusters.Get("/:id/sync", h.ClusterGetSyncInfo)
+		clusters.Post("/:id/sync/ack", h.ClusterAckSync)
+		clusters.Get("/:id/gateway/routes", h.ClusterListGatewayRoutes)
 
 	// Auth endpoints
 	authGroup := api.Group("/auth")
 	authGroup.Post("/refresh", h.RefreshToken)
 
-	// Function (WASM) endpoints (require auth)
-	funcs := api.Group("/functions", auth.AuthMiddleware(h.authMgr))
-	funcs.Post("/", h.CreateFunction)
-	funcs.Get("/:id", h.GetFunction)
-	funcs.Post("/:id/upload", h.UploadArtifact)
-	funcs.Get("/:id/download", h.DownloadFunction)
-	funcs.Delete("/:id", h.DeleteFunction)
+	// Function endpoints (require auth)
+	api.Post("/functions", auth.AuthMiddleware(h.authMgr), h.CreateFunction)
+	api.Get("/functions", auth.AuthMiddleware(h.authMgr), h.ListFunctions)
+	api.Get("/functions/:id", auth.AuthMiddleware(h.authMgr), h.GetFunction)
+	api.Post("/functions/:id/revisions", auth.AuthMiddleware(h.authMgr), h.CreateFunctionRevision)
+	api.Post("/functions/:id/deployments", auth.AuthMiddleware(h.authMgr), h.CreateFunctionDeploymentTargets)
+	api.Post("/functions/:id/upload", auth.AuthMiddleware(h.authMgr), h.UploadArtifact)
+	api.Get("/functions/:id/download", auth.AuthMiddleware(h.authMgr), h.DownloadFunction)
+	api.Delete("/functions/:id", auth.AuthMiddleware(h.authMgr), h.DeleteFunction)
 
 	// Artifact endpoints (require auth)
 	artifacts := api.Group("/artifacts", auth.AuthMiddleware(h.authMgr))

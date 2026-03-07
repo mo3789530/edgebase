@@ -18,6 +18,8 @@ type Config struct {
 	AgentVersion        string
 	KubeconfigPath      string
 	TargetNamespaces    []string
+	GatewayListenAddr   string
+	GatewayRefreshIntvl time.Duration
 	RequestTimeout      time.Duration
 	HeartbeatInterval   time.Duration
 	InventoryInterval   time.Duration
@@ -30,6 +32,7 @@ type EndpointPaths struct {
 	Inventory string
 	Sync      string
 	Ack       string
+	Gateway   string
 }
 
 func Load() (Config, error) {
@@ -55,6 +58,8 @@ func Load() (Config, error) {
 		AgentVersion:        getEnv("AGENT_VERSION", "dev"),
 		KubeconfigPath:      getEnv("AGENT_KUBECONFIG", ""),
 		TargetNamespaces:    splitCSV(getEnv("AGENT_TARGET_NAMESPACES", "edge-functions")),
+		GatewayListenAddr:   getEnv("AGENT_GATEWAY_LISTEN_ADDR", ":8088"),
+		GatewayRefreshIntvl: getDurationEnv("AGENT_GATEWAY_REFRESH_INTERVAL", 15*time.Second),
 		RequestTimeout:      getDurationEnv("AGENT_REQUEST_TIMEOUT", 10*time.Second),
 		HeartbeatInterval:   getDurationEnv("AGENT_HEARTBEAT_INTERVAL", 15*time.Second),
 		InventoryInterval:   getDurationEnv("AGENT_INVENTORY_INTERVAL", time.Minute),
@@ -64,10 +69,11 @@ func Load() (Config, error) {
 			Inventory: getEnv("AGENT_PATH_INVENTORY", "/api/v1/clusters/%s/inventory"),
 			Sync:      getEnv("AGENT_PATH_SYNC", "/api/v1/clusters/%s/sync"),
 			Ack:       getEnv("AGENT_PATH_ACK", "/api/v1/clusters/%s/sync/ack"),
+			Gateway:   getEnv("AGENT_PATH_GATEWAY", "/api/v1/clusters/%s/gateway/routes"),
 		},
 	}
 
-	if cfg.HeartbeatInterval <= 0 || cfg.InventoryInterval <= 0 || cfg.SyncInterval <= 0 || cfg.RequestTimeout <= 0 {
+	if cfg.HeartbeatInterval <= 0 || cfg.InventoryInterval <= 0 || cfg.SyncInterval <= 0 || cfg.RequestTimeout <= 0 || cfg.GatewayRefreshIntvl <= 0 {
 		return Config{}, errors.New("intervals and timeout must be > 0")
 	}
 

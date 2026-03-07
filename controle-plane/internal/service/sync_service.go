@@ -21,8 +21,9 @@ type FunctionState struct {
 }
 
 type SyncPlan struct {
-	SyncID  uuid.UUID    `json:"sync_id"`
-	Actions []SyncAction `json:"actions"`
+	SyncID     uuid.UUID    `json:"sync_id"`
+	Generation int64        `json:"generation,omitempty"`
+	Actions    []SyncAction `json:"actions"`
 }
 
 type SyncActionType string

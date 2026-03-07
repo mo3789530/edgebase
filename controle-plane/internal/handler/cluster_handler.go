@@ -27,12 +27,7 @@ func (h *Handler) ClusterGetSyncInfo(c *fiber.Ctx) error {
 		return errors.BadRequest(c, "invalid cluster id", nil)
 	}
 
-	var currentState service.NodeState
-	if err := c.BodyParser(&currentState); err != nil {
-		currentState = service.NodeState{}
-	}
-
-	plan, err := h.syncSvc.GetSyncPlan(c.Context(), id, currentState)
+	plan, err := h.controllerSvc.GetClusterSyncPlan(c.Context(), id)
 	if err != nil {
 		logger.Error(requestID, "get_cluster_sync_plan_failed", err)
 		return errors.InternalError(c, "failed to get sync plan")
@@ -57,12 +52,28 @@ func (h *Handler) ClusterAckSync(c *fiber.Ctx) error {
 		return errors.BadRequest(c, "invalid request body", nil)
 	}
 
-	if err := h.syncSvc.AcknowledgeSync(c.Context(), id, req.SyncID, req.Result); err != nil {
+	if err := h.controllerSvc.AcknowledgeClusterSync(c.Context(), id, req.SyncID, req.Result); err != nil {
 		logger.Error(requestID, "acknowledge_cluster_sync_failed", err)
 		return errors.InternalError(c, "failed to acknowledge sync")
 	}
 
 	return c.JSON(fiber.Map{"status": "acked"})
+}
+
+func (h *Handler) ClusterListGatewayRoutes(c *fiber.Ctx) error {
+	requestID := logger.GetRequestID(c)
+	id, err := h.parseUUID(c, "id")
+	if err != nil {
+		return errors.BadRequest(c, "invalid cluster id", nil)
+	}
+
+	routes, err := h.routeSvc.ListGatewayRoutes(c.Context(), id)
+	if err != nil {
+		logger.Error(requestID, "list_gateway_routes_failed", err)
+		return errors.InternalError(c, "failed to list gateway routes")
+	}
+
+	return c.JSON(routes)
 }
 
 type ClusterInventoryRequest struct {

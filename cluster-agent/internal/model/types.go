@@ -103,6 +103,8 @@ const (
 	ActionDeleteDeployment  = "DELETE_DEPLOYMENT"
 	ActionDeleteService     = "DELETE_SERVICE"
 	ActionRestartDeployment = "RESTART_DEPLOYMENT"
+	ActionApplyKService     = "APPLY_KSERVICE"
+	ActionDeleteKService    = "DELETE_KSERVICE"
 )
 
 type SyncAck struct {
