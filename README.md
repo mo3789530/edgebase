@@ -29,6 +29,13 @@ See [functions/README.md](functions/README.md) for details.
 cd platform
 ```
 
+## Docs
+
+- [Authentication](docs/authentication.md)
+- [Cluster Database Design](docs/cluster-database-design.md)
+- [EdgeBase MVP Features](docs/edgebase-mvp-features.md)
+- [EdgeBase Implementation Audit](docs/edgebase-implementation-audit.md)
+
 ## Requirements
 
 - Rust 1.70+

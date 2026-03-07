@@ -10,6 +10,10 @@ The Control Plane for the Edgebase platform, responsible for managing nodes, fun
 - Telemetry & Sync
 - Authentication (JWT)
 
+Related docs:
+
+- [Authentication](../docs/authentication.md)
+
 ## Prerequisites
 
 - Go 1.25+
@@ -59,8 +63,11 @@ AWS_BUCKET=your-bucket-name
 SERVER_PORT=8000
 DATABASE_URL=postgresql://root@localhost:26257/defaultdb?sslmode=disable
 JWT_SECRET=your-secret-key
+TOKEN_EXPIRY_HOURS=24
 MQTT_ENABLED=false
 ```
+
+For authentication setup and token usage, see [Authentication](../docs/authentication.md).
 
 ## Running
 
