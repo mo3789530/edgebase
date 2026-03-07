@@ -111,9 +111,20 @@ func (m *MockSchemaRepository) GetLatestVersion(ctx context.Context) (int, error
 	args := m.Called(ctx)
 	return args.Int(0), args.Error(1)
 }
+func (m *MockSchemaRepository) GetByVersion(ctx context.Context, version int) (*model.SchemaMigration, error) {
+	args := m.Called(ctx, version)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*model.SchemaMigration), args.Error(1)
+}
 func (m *MockSchemaRepository) ListSince(ctx context.Context, version int) ([]model.SchemaMigration, error) {
 	args := m.Called(ctx, version)
 	return args.Get(0).([]model.SchemaMigration), args.Error(1)
+}
+func (m *MockSchemaRepository) UpdateNodeStatus(ctx context.Context, status *model.NodeSchemaStatus) error {
+	args := m.Called(ctx, status)
+	return args.Error(0)
 }
 
 type MockArtifactService struct {
