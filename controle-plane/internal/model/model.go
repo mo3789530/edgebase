@@ -97,22 +97,22 @@ type TelemetryData struct {
 }
 
 type Command struct {
-	ID        uuid.UUID `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
-	DeviceID  uuid.UUID `gorm:"type:uuid;not null" json:"device_id"`
-	Type      string    `gorm:"not null" json:"type"`
-	Payload   string    `gorm:"type:jsonb;not null" json:"payload"`
-	Status    string    `gorm:"not null;default:'pending'" json:"status"`
-	CreatedAt time.Time `gorm:"not null;default:now()" json:"created_at"`
+	ID         uuid.UUID  `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
+	DeviceID   uuid.UUID  `gorm:"type:uuid;not null" json:"device_id"`
+	Type       string     `gorm:"not null" json:"type"`
+	Payload    string     `gorm:"type:jsonb;not null" json:"payload"`
+	Status     string     `gorm:"not null;default:'pending'" json:"status"`
+	CreatedAt  time.Time  `gorm:"not null;default:now()" json:"created_at"`
 	ExecutedAt *time.Time `json:"executed_at"`
 }
 
 type SyncStatus struct {
-	ID                   uuid.UUID `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
-	DeviceID             uuid.UUID `gorm:"type:uuid;not null;uniqueIndex" json:"device_id"`
-	LastSyncAt           *time.Time `json:"last_sync_at"`
-	LastSyncStatus       *string    `json:"last_sync_status"`
-	PendingRecordsCount  int        `gorm:"default:0" json:"pending_records_count"`
-	TotalSyncedRecords   int64      `gorm:"default:0" json:"total_synced_records"`
+	ID                  uuid.UUID  `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
+	DeviceID            uuid.UUID  `gorm:"type:uuid;not null;uniqueIndex" json:"device_id"`
+	LastSyncAt          *time.Time `json:"last_sync_at"`
+	LastSyncStatus      *string    `json:"last_sync_status"`
+	PendingRecordsCount int        `gorm:"default:0" json:"pending_records_count"`
+	TotalSyncedRecords  int64      `gorm:"default:0" json:"total_synced_records"`
 }
 
 type NodeSchemaStatus struct {
@@ -124,3 +124,15 @@ type NodeSchemaStatus struct {
 	ErrorMessage   string    `json:"error_message"`
 }
 
+type ClusterInventorySnapshot struct {
+	ID                uuid.UUID `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
+	ClusterID         uuid.UUID `gorm:"type:uuid;not null;index" json:"cluster_id"`
+	ObservedAt        time.Time `gorm:"not null;index" json:"observed_at"`
+	KubernetesVersion string    `json:"kubernetes_version"`
+	NodesCount        int       `gorm:"default:0" json:"nodes_count"`
+	DeploymentsCount  int       `gorm:"default:0" json:"deployments_count"`
+	ServicesCount     int       `gorm:"default:0" json:"services_count"`
+	PodsCount         int       `gorm:"default:0" json:"pods_count"`
+	Payload           string    `gorm:"type:jsonb;not null" json:"payload"`
+	CreatedAt         time.Time `gorm:"not null;default:now();index" json:"created_at"`
+}

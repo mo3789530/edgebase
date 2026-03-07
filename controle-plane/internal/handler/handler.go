@@ -17,6 +17,7 @@ type Handler struct {
 	artifactSvc     service.ArtifactService
 	schemaSvc       service.SchemaService
 	telemetrySvc    service.TelemetryService
+	inventorySvc    service.InventoryService
 	authMgr         *auth.Manager
 	tokenExpiry     time.Duration
 	metricCollector timeseries.MetricCollector
@@ -29,6 +30,7 @@ func NewHandler(
 	artifactSvc service.ArtifactService,
 	schemaSvc service.SchemaService,
 	telemetrySvc service.TelemetryService,
+	inventorySvc service.InventoryService,
 	authMgr *auth.Manager,
 	tokenExpiry time.Duration,
 	metricCollector timeseries.MetricCollector,
@@ -40,6 +42,7 @@ func NewHandler(
 		artifactSvc:     artifactSvc,
 		schemaSvc:       schemaSvc,
 		telemetrySvc:    telemetrySvc,
+		inventorySvc:    inventorySvc,
 		authMgr:         authMgr,
 		tokenExpiry:     tokenExpiry,
 		metricCollector: metricCollector,
@@ -57,6 +60,13 @@ func (h *Handler) RegisterRoutes(app *fiber.App) {
 	nodes.Get("/:id/sync", auth.AuthMiddleware(h.authMgr), h.GetSyncInfo)
 	nodes.Post("/:id/sync/ack", auth.AuthMiddleware(h.authMgr), h.AckSync)
 	nodes.Post("/:id/schema_status", auth.AuthMiddleware(h.authMgr), h.UpdateSchemaStatus)
+
+	// Cluster-agent compatibility endpoints
+	clusters := api.Group("/clusters", auth.AuthMiddleware(h.authMgr))
+	clusters.Post("/:id/heartbeat", h.ClusterHeartbeat)
+	clusters.Post("/:id/inventory", h.ClusterInventory)
+	clusters.Get("/:id/sync", h.ClusterGetSyncInfo)
+	clusters.Post("/:id/sync/ack", h.ClusterAckSync)
 
 	// Auth endpoints
 	authGroup := api.Group("/auth")
@@ -115,6 +125,3 @@ func (h *Handler) parseUUID(c *fiber.Ctx, param string) (uuid.UUID, error) {
 	}
 	return id, nil
 }
-
-
-
