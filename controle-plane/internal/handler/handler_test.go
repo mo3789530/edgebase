@@ -39,6 +39,61 @@ func (m *MockNodeService) GetNode(ctx context.Context, nodeID uuid.UUID) (*model
 	return args.Get(0).(*model.Node), args.Error(1)
 }
 
+type MockClusterService struct {
+	mock.Mock
+}
+
+func (m *MockClusterService) RegisterCluster(ctx context.Context, in service.RegisterClusterInput) (*model.Cluster, string, error) {
+	args := m.Called(ctx, in)
+	if args.Get(0) == nil {
+		return nil, "", args.Error(2)
+	}
+	return args.Get(0).(*model.Cluster), args.String(1), args.Error(2)
+}
+func (m *MockClusterService) Heartbeat(ctx context.Context, clusterID uuid.UUID) error {
+	args := m.Called(ctx, clusterID)
+	return args.Error(0)
+}
+func (m *MockClusterService) GetCluster(ctx context.Context, clusterID uuid.UUID) (*model.Cluster, error) {
+	args := m.Called(ctx, clusterID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*model.Cluster), args.Error(1)
+}
+func (m *MockClusterService) ListClusters(ctx context.Context) ([]model.Cluster, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]model.Cluster), args.Error(1)
+}
+
+type MockClusterInventoryService struct {
+	mock.Mock
+}
+
+func (m *MockClusterInventoryService) UpdateInventory(ctx context.Context, clusterID uuid.UUID, in service.ClusterInventoryInput) error {
+	args := m.Called(ctx, clusterID, in)
+	return args.Error(0)
+}
+
+type MockClusterSyncService struct {
+	mock.Mock
+}
+
+func (m *MockClusterSyncService) GetSyncPlan(ctx context.Context, clusterID uuid.UUID, currentState service.ClusterState) (*service.ClusterSyncPlan, error) {
+	args := m.Called(ctx, clusterID, currentState)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*service.ClusterSyncPlan), args.Error(1)
+}
+func (m *MockClusterSyncService) AcknowledgeSync(ctx context.Context, clusterID uuid.UUID, syncID uuid.UUID, result service.ClusterSyncResult) error {
+	args := m.Called(ctx, clusterID, syncID, result)
+	return args.Error(0)
+}
+
 type MockSyncService struct {
 	mock.Mock
 }
@@ -155,25 +210,18 @@ func (m *MockTelemetryService) RegisterDevice(ctx context.Context, name, deviceT
 	return args.Get(0).(uuid.UUID), args.Error(1)
 }
 
-type MockInventoryService struct {
-	mock.Mock
-}
-
-func (m *MockInventoryService) SaveSnapshot(ctx context.Context, clusterID uuid.UUID, in service.ClusterInventoryInput) error {
-	args := m.Called(ctx, clusterID, in)
-	return args.Error(0)
-}
-
 func TestRegisterNode(t *testing.T) {
 	mockNodeSvc := new(MockNodeService)
+	mockClusterSvc := new(MockClusterService)
+	mockClusterInvSvc := new(MockClusterInventoryService)
+	mockClusterSyncSvc := new(MockClusterSyncService)
 	mockSyncSvc := new(MockSyncService)
 	mockArtifactSvc := new(MockArtifactService)
 	mockSchemaSvc := new(MockSchemaService)
 	mockTelemetrySvc := new(MockTelemetryService)
-	mockInventorySvc := new(MockInventoryService)
 
 	authMgr := auth.NewManager("test-secret")
-	h := NewHandler(mockNodeSvc, mockSyncSvc, mockArtifactSvc, mockSchemaSvc, mockTelemetrySvc, mockInventorySvc, authMgr, time.Hour, nil, nil)
+	h := NewHandler(mockNodeSvc, mockClusterSvc, mockClusterInvSvc, mockClusterSyncSvc, mockSyncSvc, mockArtifactSvc, mockSchemaSvc, mockTelemetrySvc, authMgr, time.Hour, nil, nil)
 	app := fiber.New()
 	h.RegisterRoutes(app)
 
@@ -205,85 +253,5 @@ func TestRegisterNode(t *testing.T) {
 		assert.NoError(t, err)
 
 		mockNodeSvc.AssertExpectations(t)
-	})
-}
-
-func TestClusterCompatibilityRoutes(t *testing.T) {
-	newApp := func(clusterID uuid.UUID) (*fiber.App, *auth.Manager, *MockNodeService, *MockSyncService, *MockInventoryService) {
-		mockNodeSvc := new(MockNodeService)
-		mockSyncSvc := new(MockSyncService)
-		mockArtifactSvc := new(MockArtifactService)
-		mockSchemaSvc := new(MockSchemaService)
-		mockTelemetrySvc := new(MockTelemetryService)
-		mockInventorySvc := new(MockInventoryService)
-
-		authMgr := auth.NewManager("test-secret")
-		h := NewHandler(mockNodeSvc, mockSyncSvc, mockArtifactSvc, mockSchemaSvc, mockTelemetrySvc, mockInventorySvc, authMgr, time.Hour, nil, nil)
-		app := fiber.New()
-		h.RegisterRoutes(app)
-		return app, authMgr, mockNodeSvc, mockSyncSvc, mockInventorySvc
-	}
-
-	t.Run("ClusterHeartbeat delegates to node heartbeat", func(t *testing.T) {
-		clusterID := uuid.New()
-		app, authMgr, mockNodeSvc, _, _ := newApp(clusterID)
-		token, err := authMgr.GenerateToken(clusterID, time.Hour)
-		assert.NoError(t, err)
-
-		mockNodeSvc.On("Heartbeat", mock.Anything, clusterID).Return(nil).Once()
-
-		req := httptest.NewRequest("POST", "/api/v1/clusters/"+clusterID.String()+"/heartbeat", nil)
-		req.Header.Set("Authorization", "Bearer "+token)
-		resp, err := app.Test(req)
-
-		assert.NoError(t, err)
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-		mockNodeSvc.AssertExpectations(t)
-	})
-
-	t.Run("ClusterSync delegates to sync service", func(t *testing.T) {
-		clusterID := uuid.New()
-		app, authMgr, _, mockSyncSvc, _ := newApp(clusterID)
-		token, err := authMgr.GenerateToken(clusterID, time.Hour)
-		assert.NoError(t, err)
-
-		mockSyncSvc.On("GetSyncPlan", mock.Anything, clusterID, service.NodeState{}).Return(&service.SyncPlan{
-			SyncID:  uuid.New(),
-			Actions: []service.SyncAction{},
-		}, nil).Once()
-
-		req := httptest.NewRequest("GET", "/api/v1/clusters/"+clusterID.String()+"/sync", nil)
-		req.Header.Set("Authorization", "Bearer "+token)
-		resp, err := app.Test(req)
-
-		assert.NoError(t, err)
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-		mockSyncSvc.AssertExpectations(t)
-	})
-
-	t.Run("ClusterInventory accepts payload", func(t *testing.T) {
-		clusterID := uuid.New()
-		app, authMgr, _, _, mockInventorySvc := newApp(clusterID)
-		token, err := authMgr.GenerateToken(clusterID, time.Hour)
-		assert.NoError(t, err)
-		mockInventorySvc.On("SaveSnapshot", mock.Anything, clusterID, mock.AnythingOfType("service.ClusterInventoryInput")).Return(nil).Once()
-
-		body, _ := json.Marshal(map[string]interface{}{
-			"cluster_id":         clusterID.String(),
-			"observed_at":        time.Now().UTC().Format(time.RFC3339),
-			"kubernetes_version": "v1.31.2+k3s1",
-			"nodes":              []map[string]interface{}{},
-			"deployments":        []map[string]interface{}{},
-			"services":           []map[string]interface{}{},
-			"pods":               []map[string]interface{}{},
-		})
-		req := httptest.NewRequest("POST", "/api/v1/clusters/"+clusterID.String()+"/inventory", bytes.NewReader(body))
-		req.Header.Set("Authorization", "Bearer "+token)
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := app.Test(req)
-
-		assert.NoError(t, err)
-		assert.Equal(t, http.StatusAccepted, resp.StatusCode)
-		mockInventorySvc.AssertExpectations(t)
 	})
 }
