@@ -13,11 +13,13 @@ import (
 
 type Handler struct {
 	nodeSvc         service.NodeService
+	clusterSvc      service.ClusterService
+	clusterInvSvc   service.ClusterInventoryService
+	clusterSyncSvc  service.ClusterSyncService
 	syncSvc         service.SyncService
 	artifactSvc     service.ArtifactService
 	schemaSvc       service.SchemaService
 	telemetrySvc    service.TelemetryService
-	inventorySvc    service.InventoryService
 	authMgr         *auth.Manager
 	tokenExpiry     time.Duration
 	metricCollector timeseries.MetricCollector
@@ -26,11 +28,13 @@ type Handler struct {
 
 func NewHandler(
 	nodeSvc service.NodeService,
+	clusterSvc service.ClusterService,
+	clusterInvSvc service.ClusterInventoryService,
+	clusterSyncSvc service.ClusterSyncService,
 	syncSvc service.SyncService,
 	artifactSvc service.ArtifactService,
 	schemaSvc service.SchemaService,
 	telemetrySvc service.TelemetryService,
-	inventorySvc service.InventoryService,
 	authMgr *auth.Manager,
 	tokenExpiry time.Duration,
 	metricCollector timeseries.MetricCollector,
@@ -38,11 +42,13 @@ func NewHandler(
 ) *Handler {
 	return &Handler{
 		nodeSvc:         nodeSvc,
+		clusterSvc:      clusterSvc,
+		clusterInvSvc:   clusterInvSvc,
+		clusterSyncSvc:  clusterSyncSvc,
 		syncSvc:         syncSvc,
 		artifactSvc:     artifactSvc,
 		schemaSvc:       schemaSvc,
 		telemetrySvc:    telemetrySvc,
-		inventorySvc:    inventorySvc,
 		authMgr:         authMgr,
 		tokenExpiry:     tokenExpiry,
 		metricCollector: metricCollector,
@@ -61,12 +67,15 @@ func (h *Handler) RegisterRoutes(app *fiber.App) {
 	nodes.Post("/:id/sync/ack", auth.AuthMiddleware(h.authMgr), h.AckSync)
 	nodes.Post("/:id/schema_status", auth.AuthMiddleware(h.authMgr), h.UpdateSchemaStatus)
 
-	// Cluster-agent compatibility endpoints
-	clusters := api.Group("/clusters", auth.AuthMiddleware(h.authMgr))
-	clusters.Post("/:id/heartbeat", h.ClusterHeartbeat)
-	clusters.Post("/:id/inventory", h.ClusterInventory)
-	clusters.Get("/:id/sync", h.ClusterGetSyncInfo)
-	clusters.Post("/:id/sync/ack", h.ClusterAckSync)
+	// Cluster endpoints (register is public, others require auth)
+	clusters := api.Group("/clusters")
+	clusters.Post("/register", h.RegisterCluster)
+	clusters.Get("/", auth.AuthMiddleware(h.authMgr), h.ListClusters)
+	clusters.Get("/:id", auth.AuthMiddleware(h.authMgr), h.GetCluster)
+	clusters.Post("/:id/heartbeat", auth.AuthMiddleware(h.authMgr), h.ClusterHeartbeat)
+	clusters.Post("/:id/inventory", auth.AuthMiddleware(h.authMgr), h.UpdateClusterInventory)
+	clusters.Get("/:id/sync", auth.AuthMiddleware(h.authMgr), h.GetClusterSync)
+	clusters.Post("/:id/sync/ack", auth.AuthMiddleware(h.authMgr), h.AckClusterSync)
 
 	// Auth endpoints
 	authGroup := api.Group("/auth")

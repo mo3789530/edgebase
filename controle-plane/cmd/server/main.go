@@ -52,6 +52,9 @@ func main() {
 	// Auto Migrate
 	if err := dbConn.AutoMigrate(
 		&model.Node{},
+		&model.Cluster{},
+		&model.ClusterNode{},
+		&model.ClusterSyncRecord{},
 		&model.Function{},
 		&model.SchemaMigration{},
 		&model.NodeFunctionDeployment{},
@@ -62,7 +65,6 @@ func main() {
 		&model.SyncStatus{},
 		&model.NodeSchemaStatus{},
 		&model.AuditLog{},
-		&model.ClusterInventorySnapshot{},
 	); err != nil {
 		log.Fatalf("failed to migrate DB: %v", err)
 	}
@@ -95,19 +97,23 @@ func main() {
 
 	// Initialize Repositories
 	nodeRepo := repository.NewNodeRepository(dbConn)
+	clusterRepo := repository.NewClusterRepository(dbConn)
+	clusterInventoryRepo := repository.NewClusterInventoryRepository(dbConn)
+	clusterSyncRepo := repository.NewClusterSyncRepository(dbConn)
 	funcRepo := repository.NewFunctionRepository(dbConn)
 	schemaRepo := repository.NewSchemaRepository(dbConn)
 	syncRepo := repository.NewSyncRepository(dbConn)
 	telemetryRepo := repository.NewTelemetryRepository(dbConn)
-	inventoryRepo := repository.NewInventoryRepository(dbConn)
 
 	// Initialize Services
 	nodeSvc := service.NewNodeService(nodeRepo)
+	clusterSvc := service.NewClusterService(clusterRepo)
+	clusterInventorySvc := service.NewClusterInventoryService(clusterRepo, clusterInventoryRepo)
+	clusterSyncSvc := service.NewClusterSyncService(clusterSyncRepo, funcRepo, schemaRepo)
 	artifactSvc := service.NewArtifactService(funcRepo, storageClient)
 	schemaSvc := service.NewSchemaService(schemaRepo, mqttClient)
 	syncSvc := service.NewSyncService(syncRepo, nodeRepo, funcRepo, schemaRepo, artifactSvc)
 	telemetrySvc := service.NewTelemetryService(telemetryRepo)
-	inventorySvc := service.NewInventoryService(inventoryRepo)
 	_ = service.NewAuditService(dbConn)
 
 	// Initialize Time-Series System
@@ -188,7 +194,7 @@ func main() {
 	app.Get("/metrics", healthHandler.Metrics)
 
 	// Register API routes
-	h := handler.NewHandler(nodeSvc, syncSvc, artifactSvc, schemaSvc, telemetrySvc, inventorySvc, authMgr, time.Duration(cfg.TokenExpiryHours)*time.Hour, metricCollector, logWriter)
+	h := handler.NewHandler(nodeSvc, clusterSvc, clusterInventorySvc, clusterSyncSvc, syncSvc, artifactSvc, schemaSvc, telemetrySvc, authMgr, time.Duration(cfg.TokenExpiryHours)*time.Hour, metricCollector, logWriter)
 	h.RegisterRoutes(app)
 
 	// Setup graceful shutdown
