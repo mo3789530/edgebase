@@ -16,6 +16,12 @@ func TestAutoMigrateModelsIncludesFunctionExecutionModels(t *testing.T) {
 	if !containsModel[*FunctionDeploymentTarget](models) {
 		t.Fatalf("AutoMigrateModels() missing FunctionDeploymentTarget")
 	}
+	if !containsModel[*Invocation](models) {
+		t.Fatalf("AutoMigrateModels() missing Invocation")
+	}
+	if !containsModel[*InvocationAttempt](models) {
+		t.Fatalf("AutoMigrateModels() missing InvocationAttempt")
+	}
 }
 
 func containsModel[T any](models []interface{}) bool {

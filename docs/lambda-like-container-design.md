@@ -322,11 +322,12 @@ Function ControllerはKubernetes APIを直接操作しない。
 ### フロー
 
 1. Clientがcluster入口へリクエスト
-2. IngressがKnative Serviceへ転送
-3. Knativeがrevisionへルーティング
-4. Function containerが処理
-5. 応答を返却
-6. Invocation / InvocationAttempt を記録
+2. 外部LBまたはDNSが対象clusterのKnative ingressへ到達させる
+3. IngressがHostベースでKnative Serviceへ転送
+4. Knativeがrevisionへルーティング
+5. Function containerが処理
+6. 応答を返却
+7. Invocation / InvocationAttempt を記録
 
 ### 特徴
 
@@ -342,42 +343,58 @@ Cluster Agentに渡すplanは、Knative Service適用を前提にする。
 
 - `APPLY_KSERVICE`
 - `DELETE_KSERVICE`
-- `UPDATE_KSERVICE_TRAFFIC`
 
 ### APPLY_KSERVICE payload例
 
 ```json
 {
-  "namespace": "edge-functions",
-  "name": "telemetry-normalizer",
-  "image": "registry.local/telemetry-normalizer@sha256:abcd",
-  "port": 8080,
-  "timeout_seconds": 3,
-  "min_scale": 0,
-  "max_scale": 20,
-  "container_concurrency": 10,
-  "env": {
-    "MODE": "prod"
-  }
-}
-```
-
-### UPDATE_KSERVICE_TRAFFIC payload例
-
-```json
-{
-  "namespace": "edge-functions",
-  "name": "telemetry-normalizer",
-  "traffic": [
-    {
-      "revision": "telemetry-normalizer-v1",
-      "percent": 90
-    },
-    {
-      "revision": "telemetry-normalizer-v2",
-      "percent": 10
+  "apiVersion": "serving.knative.dev/v1",
+  "kind": "Service",
+  "metadata": {
+    "name": "telemetry-normalizer",
+    "namespace": "edge-functions",
+    "labels": {
+      "edgebase.io/function-name": "telemetry-normalizer",
+      "edgebase.io/function-version": "v2",
+      "edgebase.io/managed-by": "function-controller"
     }
-  ]
+  },
+  "spec": {
+    "template": {
+      "metadata": {
+        "annotations": {
+          "autoscaling.knative.dev/min-scale": "0",
+          "autoscaling.knative.dev/max-scale": "20"
+        }
+      },
+      "spec": {
+        "containerConcurrency": 10,
+        "timeoutSeconds": 3,
+        "containers": [
+          {
+            "image": "registry.local/telemetry-normalizer@sha256:abcd",
+            "ports": [
+              {
+                "containerPort": 8080
+              }
+            ],
+            "env": [
+              {
+                "name": "MODE",
+                "value": "prod"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "traffic": [
+      {
+        "latestRevision": true,
+        "percent": 100
+      }
+    ]
+  }
 }
 ```
 
@@ -465,6 +482,73 @@ KnativeはHTTPコンテナを前提とするため、container contractはHTTP�
   "timeout_ms": 3000
 }
 ```
+
+## Route と Knative ingress の結合方針
+
+### 基本方針
+
+- RouteはControl Plane上の論理定義として保持する
+- 実際の外部公開はcluster側のKnative ingressが担う
+- Cluster AgentはRouteごとの独自proxyを持たず、KService配備とinventory報告に責務を絞る
+
+### Route の責務
+
+- 公開host/path/methodの定義
+- FunctionDefinitionへの対応付け
+- timeoutやretryなどの論理ポリシー
+- どのclusterへ公開するかの制約
+
+### Knative ingress の責務
+
+- 外部HTTPの受信
+- HostベースのKService選択
+- revisionへの転送
+- scale-from-zeroの起動トリガ
+
+### MVP の結合ルール
+
+MVPでは Knative 単体で無理なく運用できる形に制限する。
+
+- `host` は必須とする
+- 1つの公開routeは1つのFunctionDefinitionにのみ対応する
+- 1つの `host` は1つの KService に対応させる
+- `path` は Function container にそのまま渡す補助情報として扱う
+- 同一 `host` 上で複数Functionへ path 振り分けする構成はMVP対象外とする
+- 外部DNSまたはLBは対象clusterのKnative ingressへ名前解決させる
+
+### cluster 選択の扱い
+
+MVPでは、外部公開routeは単一clusterへ束縛する。
+
+- `cluster_selector` が1 clusterに解決できることを前提にする
+- active-active の multi-cluster 同一host公開は非MVPとする
+- failover は運用または将来のglobal LBで補う
+
+### path の扱い
+
+Knative ingress は host ベース公開と相性がよく、共有 host 上の path fan-out は別レイヤのL7ルータが必要になる。
+
+そのためMVPでは:
+
+- `path` は route の論理識別と監査に使う
+- Function container は受信 path を自分で解釈してよい
+- `host + path` の組み合わせで別Functionへ振り分けるのは将来拡張に回す
+
+### 将来拡張
+
+以下が必要になった時点で、Knative ingress の前段に専用のL7ルーティング層を追加する。
+
+- 同一host配下でのpathベース振り分け
+- route単位の認証
+- WAF, rate limit, tenant別ポリシー
+- multi-cluster weighted routing
+
+候補:
+
+- Kubernetes Gateway API `HTTPRoute`
+- Ingress NGINX
+- Envoy Gateway
+- EdgeBase独自Gateway
 
 ## スケーリング方針
 
@@ -610,6 +694,11 @@ KnativeはHTTPコンテナを前提とするため、container contractはHTTP�
 ### Task 6
 
 - sample function containerでKnative上の疎通確認
+
+実装メモ:
+
+- sample container: `functions/sample-container`
+- Knative manifest: `functions/sample-container/knative-service.yaml`
 
 ## 結論
 

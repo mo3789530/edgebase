@@ -13,6 +13,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1unstructured "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -85,18 +86,6 @@ type servicePayload struct {
 type namedPayload struct {
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
-}
-
-type kservicePayload struct {
-	Namespace            string            `json:"namespace"`
-	Name                 string            `json:"name"`
-	Image                string            `json:"image"`
-	Port                 int32             `json:"port,omitempty"`
-	TimeoutSeconds       int64             `json:"timeout_seconds,omitempty"`
-	MinScale             *int32            `json:"min_scale,omitempty"`
-	MaxScale             *int32            `json:"max_scale,omitempty"`
-	ContainerConcurrency *int64            `json:"container_concurrency,omitempty"`
-	Env                  map[string]string `json:"env,omitempty"`
 }
 
 func (a *K8sApplier) applyDeployment(ctx context.Context, action model.SyncAction) model.SyncAckResource {
@@ -276,73 +265,30 @@ func (a *K8sApplier) applyKService(ctx context.Context, action model.SyncAction)
 	if a.dynamic == nil {
 		return failed(action.Type, action.Description, errors.New("dynamic kubernetes client is required"))
 	}
-	payload, err := decode[kservicePayload](action.Payload)
+	obj, namespace, name, err := decodeKServiceManifest(action.Payload)
 	if err != nil {
 		return failed(action.Type, action.Description, err)
 	}
-	if payload.Namespace == "" || payload.Name == "" || payload.Image == "" {
-		return failed(action.Type, payload.Name, errors.New("namespace, name and image are required"))
-	}
-	if payload.Port == 0 {
-		payload.Port = 8080
-	}
-	if payload.TimeoutSeconds == 0 {
-		payload.TimeoutSeconds = 3
-	}
 
 	resource := knativeServiceGVR()
-	client := a.dynamic.Resource(resource).Namespace(payload.Namespace)
+	client := a.dynamic.Resource(resource).Namespace(namespace)
 
-	obj := &metav1unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": "serving.knative.dev/v1",
-			"kind":       "Service",
-			"metadata": map[string]interface{}{
-				"name":      payload.Name,
-				"namespace": payload.Namespace,
-				"labels": map[string]interface{}{
-					"edgebase.io/managed-by": "cluster-agent",
-				},
-			},
-			"spec": map[string]interface{}{
-				"template": map[string]interface{}{
-					"metadata": map[string]interface{}{
-						"annotations": buildKServiceAnnotations(payload),
-					},
-					"spec": map[string]interface{}{
-						"containerConcurrency": payload.ContainerConcurrency,
-						"timeoutSeconds":       payload.TimeoutSeconds,
-						"containers": []interface{}{
-							map[string]interface{}{
-								"image": payload.Image,
-								"ports": []interface{}{
-									map[string]interface{}{"containerPort": payload.Port},
-								},
-								"env": buildKServiceEnv(payload.Env),
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	existing, err := client.Get(ctx, payload.Name, metav1.GetOptions{})
+	existing, err := client.Get(ctx, name, metav1.GetOptions{})
 	if err != nil && !apierrors.IsNotFound(err) {
-		return failed(action.Type, payload.Name, err)
+		return failed(action.Type, name, err)
 	}
 	if apierrors.IsNotFound(err) {
 		if _, err := client.Create(ctx, obj, metav1.CreateOptions{}); err != nil {
-			return failed(action.Type, payload.Name, err)
+			return failed(action.Type, name, err)
 		}
-		return applied(action.Type, payload.Name)
+		return applied(action.Type, name)
 	}
 
 	obj.SetResourceVersion(existing.GetResourceVersion())
 	if _, err := client.Update(ctx, obj, metav1.UpdateOptions{}); err != nil {
-		return failed(action.Type, payload.Name, err)
+		return failed(action.Type, name, err)
 	}
-	return applied(action.Type, payload.Name)
+	return applied(action.Type, name)
 }
 
 func (a *K8sApplier) deleteKService(ctx context.Context, action model.SyncAction) model.SyncAckResource {
@@ -371,28 +317,6 @@ func knativeServiceGVR() schema.GroupVersionResource {
 	}
 }
 
-func buildKServiceAnnotations(payload kservicePayload) map[string]interface{} {
-	annotations := map[string]interface{}{}
-	if payload.MinScale != nil {
-		annotations["autoscaling.knative.dev/min-scale"] = fmt.Sprintf("%d", *payload.MinScale)
-	}
-	if payload.MaxScale != nil {
-		annotations["autoscaling.knative.dev/max-scale"] = fmt.Sprintf("%d", *payload.MaxScale)
-	}
-	return annotations
-}
-
-func buildKServiceEnv(values map[string]string) []interface{} {
-	if len(values) == 0 {
-		return nil
-	}
-	env := make([]interface{}, 0, len(values))
-	for key, value := range values {
-		env = append(env, map[string]interface{}{"name": key, "value": value})
-	}
-	return env
-}
-
 func decode[T any](raw json.RawMessage) (T, error) {
 	var payload T
 	if len(raw) == 0 {
@@ -402,6 +326,54 @@ func decode[T any](raw json.RawMessage) (T, error) {
 		return payload, fmt.Errorf("decode payload: %w", err)
 	}
 	return payload, nil
+}
+
+func decodeKServiceManifest(raw json.RawMessage) (*metav1unstructured.Unstructured, string, string, error) {
+	if len(raw) == 0 {
+		return nil, "", "", errors.New("empty payload")
+	}
+
+	var object map[string]interface{}
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return nil, "", "", fmt.Errorf("decode payload: %w", err)
+	}
+
+	obj := &metav1unstructured.Unstructured{Object: object}
+	if obj.GetAPIVersion() != "serving.knative.dev/v1" {
+		return nil, "", "", fmt.Errorf("unexpected apiVersion %q", obj.GetAPIVersion())
+	}
+	if obj.GetKind() != "Service" {
+		return nil, "", "", fmt.Errorf("unexpected kind %q", obj.GetKind())
+	}
+
+	name := obj.GetName()
+	namespace := obj.GetNamespace()
+	if name == "" || namespace == "" {
+		return nil, "", "", errors.New("metadata.name and metadata.namespace are required")
+	}
+
+	spec, found, err := unstructured.NestedMap(obj.Object, "spec")
+	if err != nil {
+		return nil, "", "", fmt.Errorf("read spec: %w", err)
+	}
+	if err == nil && !found {
+		return nil, "", "", errors.New("spec is required")
+	}
+	if _, ok := spec["template"]; !ok {
+		return nil, "", "", errors.New("spec.template is required")
+	}
+
+	labels := obj.GetLabels()
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	if _, ok := labels["edgebase.io/managed-by"]; !ok {
+		labels["edgebase.io/managed-by"] = "cluster-agent"
+	}
+	obj.SetLabels(labels)
+
+	unstructured.RemoveNestedField(obj.Object, "status")
+	return obj, namespace, name, nil
 }
 
 func failed(resourceType, resourceName string, err error) model.SyncAckResource {

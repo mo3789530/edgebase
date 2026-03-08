@@ -104,7 +104,7 @@ Agentは以下のモジュールで構成する。
 
 責務:
 
-- Deployment, Service, Pod, Node 情報を収集
+- Knative Service, Revision, Pod, Node 情報を収集
 - Controller比較用に正規化
 
 ### 3. Plan Fetcher
@@ -120,13 +120,13 @@ Agentは以下のモジュールで構成する。
 責務:
 
 - SyncActionをk8sリソース操作へ変換
-- desired_spec を Kubernetes object に変換
+- Control Planeが渡した desired manifest を検証し、そのまま apply に渡す
 
 ### 5. Resource Applier
 
 責務:
 
-- create/update/delete/restart の実行
+- Knative Service の create/update/delete を実行
 - apply結果の収集
 
 ### 6. Ack Reporter
@@ -194,23 +194,13 @@ Agentが送るinventoryは、Controllerが差分判定に使える粒度に限�
       "status": "Ready"
     }
   ],
-  "deployments": [
+  "knative_services": [
     {
       "namespace": "edge-functions",
-      "name": "fn-telemetry-normalizer-v1",
-      "image": "registry.local/telemetry-normalizer:v1",
-      "ready_replicas": 1,
-      "available_replicas": 1
-    }
-  ],
-  "services": [
-    {
-      "namespace": "edge-functions",
-      "name": "fn-telemetry-normalizer",
-      "selector": {
-        "edgebase.io/function-name": "telemetry-normalizer",
-        "edgebase.io/function-version": "v1"
-      }
+      "name": "telemetry-normalizer",
+      "latest_ready_revision": "telemetry-normalizer-00001",
+      "latest_created_revision": "telemetry-normalizer-00002",
+      "ready": true
     }
   ]
 }
@@ -219,8 +209,8 @@ Agentが送るinventoryは、Controllerが差分判定に使える粒度に限�
 ### 収集対象
 
 - Node
-- Deployment
-- Service
+- Knative Service
+- Knative Revision
 - Pod概要
 
 ### 初期では不要
@@ -246,58 +236,40 @@ Agentが送るinventoryは、Controllerが差分判定に使える粒度に限�
 
 ## Sync Action対応
 
-### APPLY_DEPLOYMENT
+### APPLY_KSERVICE
 
 処理:
 
-- Deployment manifestを作成
-- create or update を実行
+- `desired_spec` を Knative Service manifest として検証する
+- `serving.knative.dev/v1, Kind=Service` であることを確認する
+- `metadata.name` と `metadata.namespace` を確認する
+- `status` は破棄し、必要な管理ラベルを補完する
+- create or update を実行する
 
-### APPLY_SERVICE
-
-処理:
-
-- Service manifestを作成
-- create or update を実行
-
-### DELETE_DEPLOYMENT
+### DELETE_KSERVICE
 
 処理:
 
-- 対象Deploymentを削除
-
-### DELETE_SERVICE
-
-処理:
-
-- 対象Serviceを削除
-
-### RESTART_DEPLOYMENT
-
-処理:
-
-- pod template annotation更新などでrollout restart相当を実行
+- namespace/name をもとに対象 KService を削除する
 
 ## Kubernetes反映方針
 
 ### 適用戦略
 
-MVPでは server-side apply か upsert 的な create/update を採用する。
+MVPでは upsert 的な create/update を採用する。
 
 要件:
 
 - 同じspecで再実行しても安全
 - 差分更新が可能
+- Control Planeが生成した manifest を壊さない
 - Controller管理ラベルを付与する
 
 ### 管理対象
 
-- Deployment
-- Service
-- ConfigMap
-- Secret
+- Knative Service
 
-初期は Deployment と Service を優先する。
+初期は Knative Service を優先する。
 
 ### ラベル方針
 
@@ -331,15 +303,10 @@ MVPでは再起動時に失われても致命的ではないため、単純な�
   "success": false,
   "results": [
     {
-      "resource_type": "Deployment",
-      "resource_name": "fn-telemetry-normalizer-v2",
+      "resource_type": "APPLY_KSERVICE",
+      "resource_name": "telemetry-normalizer",
       "status": "failed",
       "error_message": "image pull backoff"
-    },
-    {
-      "resource_type": "Service",
-      "resource_name": "fn-telemetry-normalizer",
-      "status": "skipped"
     }
   ]
 }
@@ -388,10 +355,11 @@ MVPでは事前作成でもよい。
 - namespaceに必要なSecretがある前提
 - 後続でSecret Distributionと連携する
 
-### Replicas
+### Knative scaling
 
-- planの `replicas` を尊重する
-- 未指定なら1
+- scale設定は manifest 内の annotation に従う
+- min/max scale は `autoscaling.knative.dev/*` を使う
+- replica数を直接制御しない
 
 ## Health判定
 
@@ -477,7 +445,7 @@ type ResourceApplier interface {
 - heartbeat loop
 - inventory送信
 - sync fetch
-- Deployment/Serviceのapply/delete
+- Knative Serviceのapply/delete
 - ACK送信
 
 ## 非MVP

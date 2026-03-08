@@ -8,6 +8,8 @@ func AutoMigrateModels() []interface{} {
 		&FunctionRevision{},
 		&FunctionDeploymentTarget{},
 		&RouteDefinition{},
+		&Invocation{},
+		&InvocationAttempt{},
 		&SchemaMigration{},
 		&NodeFunctionDeployment{},
 		&SyncRecord{},

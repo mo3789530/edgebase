@@ -133,15 +133,43 @@ func TestK8sApplier_ApplyKService(t *testing.T) {
 	applier := NewK8sApplier(clientset, dynamicClient)
 
 	payload, _ := json.Marshal(map[string]any{
-		"namespace":             "edge-functions",
-		"name":                  "telemetry-normalizer",
-		"image":                 "registry.local/telemetry-normalizer@sha256:abcd",
-		"port":                  8080,
-		"timeout_seconds":       3,
-		"min_scale":             0,
-		"max_scale":             20,
-		"container_concurrency": 10,
-		"env":                   map[string]string{"MODE": "prod"},
+		"apiVersion": "serving.knative.dev/v1",
+		"kind":       "Service",
+		"metadata": map[string]any{
+			"name":      "telemetry-normalizer",
+			"namespace": "edge-functions",
+			"labels": map[string]string{
+				"edgebase.io/function-name": "telemetry-normalizer",
+			},
+		},
+		"spec": map[string]any{
+			"template": map[string]any{
+				"metadata": map[string]any{
+					"annotations": map[string]string{
+						"autoscaling.knative.dev/min-scale": "0",
+						"autoscaling.knative.dev/max-scale": "20",
+					},
+				},
+				"spec": map[string]any{
+					"containerConcurrency": int64(10),
+					"timeoutSeconds":       int64(3),
+					"containers": []map[string]any{{
+						"image": "registry.local/telemetry-normalizer@sha256:abcd",
+						"ports": []map[string]any{{
+							"containerPort": int64(8080),
+						}},
+						"env": []map[string]any{{
+							"name":  "MODE",
+							"value": "prod",
+						}},
+					}},
+				},
+			},
+			"traffic": []map[string]any{{
+				"latestRevision": true,
+				"percent":        int64(100),
+			}},
+		},
 	})
 
 	ack, err := applier.Apply(context.Background(), &model.SyncPlan{
@@ -163,5 +191,16 @@ func TestK8sApplier_ApplyKService(t *testing.T) {
 	}
 	if obj.GetName() != "telemetry-normalizer" {
 		t.Fatalf("name = %s", obj.GetName())
+	}
+	if obj.GetLabels()["edgebase.io/managed-by"] != "cluster-agent" {
+		t.Fatalf("managed-by label not injected: %+v", obj.GetLabels())
+	}
+
+	spec, ok, err := unstructured.NestedMap(obj.Object, "spec")
+	if err != nil || !ok {
+		t.Fatalf("spec not found: ok=%v err=%v", ok, err)
+	}
+	if _, ok := spec["traffic"]; !ok {
+		t.Fatalf("traffic not found in spec: %+v", spec)
 	}
 }

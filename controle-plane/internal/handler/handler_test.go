@@ -229,6 +229,72 @@ func (m *MockInventoryService) SaveSnapshot(ctx context.Context, clusterID uuid.
 	return args.Error(0)
 }
 
+type MockRouteService struct {
+	mock.Mock
+}
+
+func (m *MockRouteService) CreateRoute(ctx context.Context, input service.CreateRouteInput) (*model.RouteDefinition, error) {
+	args := m.Called(ctx, input)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*model.RouteDefinition), args.Error(1)
+}
+
+func (m *MockRouteService) ListRoutes(ctx context.Context) ([]model.RouteDefinition, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]model.RouteDefinition), args.Error(1)
+}
+
+func (m *MockRouteService) ListGatewayRoutes(ctx context.Context, clusterID uuid.UUID) ([]service.GatewayRoute, error) {
+	args := m.Called(ctx, clusterID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]service.GatewayRoute), args.Error(1)
+}
+
+type MockInvocationService struct {
+	mock.Mock
+}
+
+func (m *MockInvocationService) StartInvocation(ctx context.Context, input service.StartInvocationInput) (*model.Invocation, error) {
+	args := m.Called(ctx, input)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*model.Invocation), args.Error(1)
+}
+
+func (m *MockInvocationService) CompleteInvocation(ctx context.Context, invocationID uuid.UUID, input service.CompleteInvocationInput) error {
+	args := m.Called(ctx, invocationID, input)
+	return args.Error(0)
+}
+
+func (m *MockInvocationService) RecordAttempt(ctx context.Context, invocationID uuid.UUID, input service.RecordAttemptInput) (*model.InvocationAttempt, error) {
+	args := m.Called(ctx, invocationID, input)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*model.InvocationAttempt), args.Error(1)
+}
+
+func (m *MockInvocationService) CompleteAttempt(ctx context.Context, attemptID uuid.UUID, input service.CompleteAttemptInput) error {
+	args := m.Called(ctx, attemptID, input)
+	return args.Error(0)
+}
+
+func (m *MockInvocationService) GetInvocation(ctx context.Context, invocationID uuid.UUID) (*service.InvocationDetail, error) {
+	args := m.Called(ctx, invocationID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*service.InvocationDetail), args.Error(1)
+}
+
 func TestRegisterNode(t *testing.T) {
 	mockNodeSvc := new(MockNodeService)
 	mockSyncSvc := new(MockSyncService)
@@ -236,12 +302,14 @@ func TestRegisterNode(t *testing.T) {
 	mockFunctionSvc := new(MockFunctionCatalogService)
 	mockDeploymentSvc := new(MockFunctionDeploymentService)
 	mockControllerSvc := new(MockFunctionControllerService)
+	mockRouteSvc := new(MockRouteService)
+	mockInvocationSvc := new(MockInvocationService)
 	mockSchemaSvc := new(MockSchemaService)
 	mockTelemetrySvc := new(MockTelemetryService)
 	mockInventorySvc := new(MockInventoryService)
 
 	authMgr := auth.NewManager("test-secret")
-	h := NewHandler(mockNodeSvc, mockSyncSvc, mockArtifactSvc, mockFunctionSvc, mockDeploymentSvc, mockControllerSvc, mockSchemaSvc, mockTelemetrySvc, mockInventorySvc, authMgr, time.Hour, nil, nil)
+	h := NewHandler(mockNodeSvc, mockSyncSvc, mockArtifactSvc, mockFunctionSvc, mockDeploymentSvc, mockControllerSvc, mockRouteSvc, mockInvocationSvc, mockSchemaSvc, mockTelemetrySvc, mockInventorySvc, authMgr, time.Hour, nil, nil)
 	app := fiber.New()
 	h.RegisterRoutes(app)
 
@@ -283,12 +351,14 @@ func TestFunctionRoutes(t *testing.T) {
 	mockFunctionSvc := new(MockFunctionCatalogService)
 	mockDeploymentSvc := new(MockFunctionDeploymentService)
 	mockControllerSvc := new(MockFunctionControllerService)
+	mockRouteSvc := new(MockRouteService)
+	mockInvocationSvc := new(MockInvocationService)
 	mockSchemaSvc := new(MockSchemaService)
 	mockTelemetrySvc := new(MockTelemetryService)
 	mockInventorySvc := new(MockInventoryService)
 
 	authMgr := auth.NewManager("test-secret")
-	h := NewHandler(mockNodeSvc, mockSyncSvc, mockArtifactSvc, mockFunctionSvc, mockDeploymentSvc, mockControllerSvc, mockSchemaSvc, mockTelemetrySvc, mockInventorySvc, authMgr, time.Hour, nil, nil)
+	h := NewHandler(mockNodeSvc, mockSyncSvc, mockArtifactSvc, mockFunctionSvc, mockDeploymentSvc, mockControllerSvc, mockRouteSvc, mockInvocationSvc, mockSchemaSvc, mockTelemetrySvc, mockInventorySvc, authMgr, time.Hour, nil, nil)
 	app := fiber.New()
 	h.RegisterRoutes(app)
 
@@ -334,12 +404,14 @@ func TestClusterCompatibilityRoutes(t *testing.T) {
 		mockFunctionSvc := new(MockFunctionCatalogService)
 		mockDeploymentSvc := new(MockFunctionDeploymentService)
 		mockControllerSvc := new(MockFunctionControllerService)
+		mockRouteSvc := new(MockRouteService)
+		mockInvocationSvc := new(MockInvocationService)
 		mockSchemaSvc := new(MockSchemaService)
 		mockTelemetrySvc := new(MockTelemetryService)
 		mockInventorySvc := new(MockInventoryService)
 
 		authMgr := auth.NewManager("test-secret")
-		h := NewHandler(mockNodeSvc, mockSyncSvc, mockArtifactSvc, mockFunctionSvc, mockDeploymentSvc, mockControllerSvc, mockSchemaSvc, mockTelemetrySvc, mockInventorySvc, authMgr, time.Hour, nil, nil)
+		h := NewHandler(mockNodeSvc, mockSyncSvc, mockArtifactSvc, mockFunctionSvc, mockDeploymentSvc, mockControllerSvc, mockRouteSvc, mockInvocationSvc, mockSchemaSvc, mockTelemetrySvc, mockInventorySvc, authMgr, time.Hour, nil, nil)
 		app := fiber.New()
 		h.RegisterRoutes(app)
 		return app, authMgr, mockNodeSvc, mockControllerSvc, mockInventorySvc

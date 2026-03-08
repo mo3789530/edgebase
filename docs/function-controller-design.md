@@ -209,8 +209,16 @@ Controllerの主な出力は `SyncPlan` である。
 
 - `APPLY_KSERVICE`
 - `DELETE_KSERVICE`
-- `UPDATE_KSERVICE_TRAFFIC`
 - `NOOP`
+
+`APPLY_KSERVICE` は Knative Service 全体の desired manifest を持つ。
+image更新、env更新、autoscaling更新、traffic更新はすべて `APPLY_KSERVICE` に含める。
+
+理由:
+
+- Knativeでは traffic も KService spec の一部である
+- Cluster Agent側の apply 実装を単純にできる
+- desired stateとの差分解消を1種類の更新操作へ寄せられる
 
 ## 内部データモデル
 
@@ -235,6 +243,9 @@ clusterに対して最終的に存在してほしいKnative Service実体。
 - `max_scale`
 - `container_concurrency`
 - `env`
+- `labels`
+- `annotations`
+- `traffic`
 
 ### ObservedFunctionService
 
@@ -250,6 +261,7 @@ inventoryから得られた現状態。
 - `image`
 - `ready`
 - `observed_generation`
+- `latest_created_revision`
 
 ### ServiceDiff
 
@@ -306,22 +318,11 @@ Controllerが生成するKnativeリソース名は一貫させる。
 条件:
 
 - desiredとobservedが存在する
-- image, env, timeout, autoscaling設定 のいずれかが異なる
+- image, env, timeout, autoscaling設定, traffic のいずれかが異なる
 
 生成するaction:
 
 - `APPLY_KSERVICE`
-
-#### traffic更新
-
-条件:
-
-- desired revisionやtraffic比率が変化している
-- KService自体は存在している
-
-生成するaction:
-
-- `UPDATE_KSERVICE_TRAFFIC`
 
 #### 削除
 
@@ -339,8 +340,7 @@ Controllerが生成するKnativeリソース名は一貫させる。
 基本順序は以下。
 
 1. `APPLY_KSERVICE`
-2. `UPDATE_KSERVICE_TRAFFIC`
-3. `DELETE_KSERVICE`
+2. `DELETE_KSERVICE`
 
 削除は最後に回す。
 
@@ -364,35 +364,54 @@ Controllerが生成するKnativeリソース名は一貫させる。
       "resource_name": "telemetry-normalizer",
       "namespace": "edge-functions",
       "desired_spec": {
-        "image": "registry.local/telemetry-normalizer@sha256:abcd",
-        "port": 8080,
-        "timeout_seconds": 3,
-        "min_scale": 0,
-        "max_scale": 20,
-        "container_concurrency": 10
+        "apiVersion": "serving.knative.dev/v1",
+        "kind": "Service",
+        "metadata": {
+          "name": "telemetry-normalizer",
+          "namespace": "edge-functions",
+          "labels": {
+            "edgebase.io/function-name": "telemetry-normalizer",
+            "edgebase.io/function-version": "v2",
+            "edgebase.io/managed-by": "function-controller"
+          }
+        },
+        "spec": {
+          "template": {
+            "metadata": {
+              "annotations": {
+                "autoscaling.knative.dev/min-scale": "0",
+                "autoscaling.knative.dev/max-scale": "20"
+              }
+            },
+            "spec": {
+              "containerConcurrency": 10,
+              "timeoutSeconds": 3,
+              "containers": [
+                {
+                  "image": "registry.local/telemetry-normalizer@sha256:abcd",
+                  "ports": [
+                    {
+                      "containerPort": 8080
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "traffic": [
+            {
+              "revisionName": "telemetry-normalizer-v1",
+              "percent": 90
+            },
+            {
+              "latestRevision": true,
+              "percent": 10
+            }
+          ]
+        }
       },
       "reason": "new revision v2 must be deployed",
       "order": 1
-    },
-    {
-      "type": "UPDATE_KSERVICE_TRAFFIC",
-      "resource_type": "KnativeService",
-      "resource_name": "telemetry-normalizer",
-      "namespace": "edge-functions",
-      "desired_spec": {
-        "traffic": [
-          {
-            "revision": "telemetry-normalizer-v1",
-            "percent": 90
-          },
-          {
-            "revision": "telemetry-normalizer-v2",
-            "percent": 10
-          }
-        ]
-      },
-      "reason": "canary rollout step",
-      "order": 2
     }
   ]
 }
@@ -425,6 +444,15 @@ Cluster Agentはapply後にACKを返す。
 3. targetの状態を更新
 4. clusterの最終同期時刻を更新
 5. 必要なら retry候補を作る
+
+ACKには、Knativeが生成した revision 名や observed generation を含められるようにする。
+
+例:
+
+- `observed_generation`
+- `latest_created_revision`
+- `latest_ready_revision`
+- `service_url`
 
 ## 状態遷移
 
@@ -501,6 +529,56 @@ pending -> planning -> applying -> ready
 - cluster側のKnative Serving不整合として記録する
 - apply retry対象とする
 
+## Desired KService 生成ルール
+
+Function Controllerは `FunctionDefinition`、`FunctionRevision`、`FunctionDeploymentTarget` から
+Knative Service manifestを組み立てる。
+
+### フィールド対応
+
+- KService名: `FunctionDefinition.name`
+- namespace: `FunctionDeploymentTarget.namespace`
+- container image: `FunctionRevision.image` または `image_digest`
+- command/args/env: `FunctionRevision.command`, `args`, `env`
+- port: `FunctionRevision.port`
+- timeoutSeconds: `FunctionDefinition.default_timeout_seconds`
+- containerConcurrency: `FunctionDeploymentTarget.container_concurrency`
+- min/max scale: `FunctionDeploymentTarget.min_scale`, `max_scale`
+- labels: function id, revision id, managed-by を付与
+- annotations: autoscaling系を付与
+
+### traffic の扱い
+
+MVPでは、1 target は 1つの KService に対して 100% の traffic を持つ。
+
+- `desired_revision_id` が変わった場合は、KService template を更新する
+- traffic は基本的に `latestRevision: true, percent: 100` を生成する
+- weighted traffic split は設計上の拡張点として残すが、初期実装では必須にしない
+
+将来的に canary を有効化する場合のみ、過去 revision への明示 traffic を生成する。
+
+## Inventory比較ルール
+
+差分判定は Kubernetes raw object の完全一致ではなく、Controllerが管理する意味的フィールドに限定する。
+
+比較対象:
+
+- image digest
+- command/args/env
+- port
+- timeout
+- min/max scale annotations
+- container concurrency
+- traffic
+- EdgeBase管理ラベル
+
+比較対象外:
+
+- Knativeが自動付与する status
+- resourceVersion
+- managedFields
+- 自動生成revision名の揺れ
+
 ## 再試行方針
 
 MVPでは単純化する。
@@ -563,6 +641,7 @@ Controllerは独立プロセスでなく、初期は `controle-plane/internal/se
 - inventoryとの差分判定
 - `APPLY_KSERVICE` / `DELETE_KSERVICE` planを返す
 - ACKを保存して状態更新
+- traffic は `latestRevision: true, percent: 100` の固定運用にする
 
 ## 非MVP
 

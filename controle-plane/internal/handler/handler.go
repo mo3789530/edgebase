@@ -19,6 +19,7 @@ type Handler struct {
 	deploymentSvc   service.FunctionDeploymentService
 	controllerSvc   service.FunctionControllerService
 	routeSvc        service.RouteService
+	invocationSvc   service.InvocationService
 	schemaSvc       service.SchemaService
 	telemetrySvc    service.TelemetryService
 	inventorySvc    service.InventoryService
@@ -36,6 +37,7 @@ func NewHandler(
 	deploymentSvc service.FunctionDeploymentService,
 	controllerSvc service.FunctionControllerService,
 	routeSvc service.RouteService,
+	invocationSvc service.InvocationService,
 	schemaSvc service.SchemaService,
 	telemetrySvc service.TelemetryService,
 	inventorySvc service.InventoryService,
@@ -52,6 +54,7 @@ func NewHandler(
 		deploymentSvc:   deploymentSvc,
 		controllerSvc:   controllerSvc,
 		routeSvc:        routeSvc,
+		invocationSvc:   invocationSvc,
 		schemaSvc:       schemaSvc,
 		telemetrySvc:    telemetrySvc,
 		inventorySvc:    inventorySvc,
@@ -75,11 +78,11 @@ func (h *Handler) RegisterRoutes(app *fiber.App) {
 
 	// Cluster-agent compatibility endpoints
 	clusters := api.Group("/clusters", auth.AuthMiddleware(h.authMgr))
-		clusters.Post("/:id/heartbeat", h.ClusterHeartbeat)
-		clusters.Post("/:id/inventory", h.ClusterInventory)
-		clusters.Get("/:id/sync", h.ClusterGetSyncInfo)
-		clusters.Post("/:id/sync/ack", h.ClusterAckSync)
-		clusters.Get("/:id/gateway/routes", h.ClusterListGatewayRoutes)
+	clusters.Post("/:id/heartbeat", h.ClusterHeartbeat)
+	clusters.Post("/:id/inventory", h.ClusterInventory)
+	clusters.Get("/:id/sync", h.ClusterGetSyncInfo)
+	clusters.Post("/:id/sync/ack", h.ClusterAckSync)
+	clusters.Get("/:id/gateway/routes", h.ClusterListGatewayRoutes)
 
 	// Auth endpoints
 	authGroup := api.Group("/auth")
@@ -107,6 +110,14 @@ func (h *Handler) RegisterRoutes(app *fiber.App) {
 	routes := api.Group("/routes", auth.AuthMiddleware(h.authMgr))
 	routes.Post("/", h.CreateRoute)
 	routes.Get("/", h.ListRoutes)
+
+	// Invocation endpoints (require auth)
+	invocations := api.Group("/invocations", auth.AuthMiddleware(h.authMgr))
+	invocations.Post("/start", h.StartInvocation)
+	invocations.Post("/:id/complete", h.CompleteInvocation)
+	invocations.Post("/:id/attempts", h.RecordInvocationAttempt)
+	invocations.Post("/attempts/:attempt_id/complete", h.CompleteInvocationAttempt)
+	invocations.Get("/:id", h.GetInvocation)
 
 	// Schema endpoints (require auth)
 	schemas := api.Group("/schemas", auth.AuthMiddleware(h.authMgr))

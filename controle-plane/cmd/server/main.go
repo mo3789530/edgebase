@@ -87,6 +87,8 @@ func main() {
 	functionRevisionRepo := repository.NewFunctionRevisionRepository(dbConn)
 	functionDeploymentTargetRepo := repository.NewFunctionDeploymentTargetRepository(dbConn)
 	routeRepo := repository.NewRouteRepository(dbConn)
+	invocationRepo := repository.NewInvocationRepository(dbConn)
+	invocationAttemptRepo := repository.NewInvocationAttemptRepository(dbConn)
 	schemaRepo := repository.NewSchemaRepository(dbConn)
 	syncRepo := repository.NewSyncRepository(dbConn)
 	telemetryRepo := repository.NewTelemetryRepository(dbConn)
@@ -99,6 +101,7 @@ func main() {
 	functionDeploymentSvc := service.NewFunctionDeploymentService(functionDefinitionRepo, functionRevisionRepo, functionDeploymentTargetRepo)
 	functionControllerSvc := service.NewFunctionControllerService(functionDeploymentTargetRepo, functionDefinitionRepo, functionRevisionRepo, inventoryRepo)
 	routeSvc := service.NewRouteService(routeRepo, functionDeploymentTargetRepo, functionDefinitionRepo)
+	invocationSvc := service.NewInvocationService(invocationRepo, invocationAttemptRepo)
 	schemaSvc := service.NewSchemaService(schemaRepo, mqttClient)
 	syncSvc := service.NewSyncService(syncRepo, nodeRepo, funcRepo, schemaRepo, artifactSvc)
 	telemetrySvc := service.NewTelemetryService(telemetryRepo)
@@ -183,7 +186,7 @@ func main() {
 	app.Get("/metrics", healthHandler.Metrics)
 
 	// Register API routes
-	h := handler.NewHandler(nodeSvc, syncSvc, artifactSvc, functionSvc, functionDeploymentSvc, functionControllerSvc, routeSvc, schemaSvc, telemetrySvc, inventorySvc, authMgr, time.Duration(cfg.TokenExpiryHours)*time.Hour, metricCollector, logWriter)
+	h := handler.NewHandler(nodeSvc, syncSvc, artifactSvc, functionSvc, functionDeploymentSvc, functionControllerSvc, routeSvc, invocationSvc, schemaSvc, telemetrySvc, inventorySvc, authMgr, time.Duration(cfg.TokenExpiryHours)*time.Hour, metricCollector, logWriter)
 	h.RegisterRoutes(app)
 
 	// Setup graceful shutdown

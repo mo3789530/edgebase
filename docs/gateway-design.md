@@ -1,8 +1,18 @@
 # Gateway設計
 
+## ステータス
+
+この文書は独自Gatewayを前提にした旧案を含む。
+
+Lambda-like container 基盤のMVPでは、外部公開はKnative ingressを使うため、独自Gatewayは必須ではない。
+現時点では以下の位置づけとする。
+
+- MVP: 採用しない
+- 将来: path-based routing、認証、WAF、rate limit、多cluster振り分けが必要になった時点で再導入を検討する
+
 ## 目的
 
-Gatewayは、Lambda風Function基盤における外部リクエストの入口であり、認証、ルーティング、クラスタ選択、Function呼び出し、実行記録を担うサービスである。
+Gatewayは、将来的にKnative ingressの前段へ置く拡張用のL7ルーティング層であり、認証、route解決、cluster選択、ポリシー適用を担う候補である。
 
 本資料では以下を定義する。
 
@@ -34,7 +44,7 @@ Gateway
   +--> Metrics Collector
 ```
 
-Gatewayは外部公開される唯一の入口として扱う。
+MVPでは外部公開される唯一の入口としては扱わず、Knative ingress を優先する。
 
 ## 役割
 
@@ -55,9 +65,9 @@ Gatewayは外部公開される唯一の入口として扱う。
 
 ## 設計原則
 
-### 1. 外部公開はGatewayのみに集約する
+### 1. MVPでは外部公開をKnative ingressへ集約する
 
-Function PodやServiceを直接外部公開しない。
+Function PodやServiceを直接外部公開せず、Gatewayが必要になるまではKnative ingressを使う。
 
 ### 2. Gatewayはできるだけstatelessにする
 
@@ -75,6 +85,18 @@ Function PodやServiceを直接外部公開しない。
 ### 4. request単位の追跡IDを必ず付与する
 
 `request_id` と `invocation_id` を持たせ、ログと履歴を相関できるようにする。
+
+## MVPとの関係
+
+Knative ingress を使うMVPでは、Route と外部公開の結合は次の制約で扱う。
+
+- `host` は必須
+- 1つの `host` は1つの KService に対応する
+- `path` は Function container に渡す補助情報として扱う
+- 同一host配下でのpath分岐は扱わない
+- 単一routeの公開先clusterは1つに制限する
+
+この制約を超える要件が出た時点で、Gatewayを再度有効化する。
 
 ## 提供API
 
